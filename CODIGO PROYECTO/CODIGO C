@@ -1,0 +1,318 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>  // Para cambiar colores en Windows
+
+// Estructura para representar un producto
+typedef struct {
+    int id;
+    char nombre[50];
+    char tipo[30];
+    int cantidad;
+    float precio;
+} Producto;
+
+// Función para cambiar el color del texto en consola (Windows)
+void cambiarColor(int color) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTextAttribute(hConsole, color);
+}
+
+// Función para mostrar el encabezado con colores
+void mostrarEncabezado() {
+    system("cls");  // Limpiar pantalla
+    
+    cambiarColor(11);  // Cian brillante
+    printf("=================================================\n");
+    printf("    SISTEMA DE GESTION DE INVENTARIO - JK MULTIPLASTICOS\n");
+    printf("=================================================\n");
+    cambiarColor(7);  // Blanco (color normal)
+}
+
+// Función para agregar un producto usando punteros
+void agregarProducto(Producto *inventario, int *totalProductos) {
+    mostrarEncabezado();
+    
+    cambiarColor(14);  // Amarillo
+    printf("=== AGREGAR NUEVO PRODUCTO ===\n\n");
+    cambiarColor(7);
+    
+    // Usando puntero para acceder al producto actual
+    Producto *nuevo = &inventario[*totalProductos];
+    
+    nuevo->id = *totalProductos + 1;
+    
+    printf("Nombre del producto: ");
+    fflush(stdin);
+    fgets(nuevo->nombre, 50, stdin);
+    // Eliminar salto de línea
+    nuevo->nombre[strcspn(nuevo->nombre, "\n")] = 0;
+    
+    printf("Tipo (envase/plastico): ");
+    fgets(nuevo->tipo, 30, stdin);
+    nuevo->tipo[strcspn(nuevo->tipo, "\n")] = 0;
+    
+    printf("Cantidad: ");
+    scanf("%d", &nuevo->cantidad);
+    
+    printf("Precio unitario: ");
+    scanf("%f", &nuevo->precio);
+    
+    (*totalProductos)++;
+    
+    cambiarColor(10);  // Verde
+    printf("\nProducto agregado exitosamente!\n");
+    cambiarColor(7);
+    
+    Sleep(1500);  // Pausa de 1.5 segundos
+}
+
+// Función para mostrar inventario usando punteros y cadenas
+void mostrarInventario(Producto *inventario, int totalProductos) {
+    mostrarEncabezado();
+    
+    cambiarColor(13);  // Magenta
+    printf("=== INVENTARIO ACTUAL ===\n\n");
+    cambiarColor(7);
+    
+    if (totalProductos == 0) {
+        cambiarColor(12);  // Rojo
+        printf("No hay productos en el inventario.\n");
+        cambiarColor(7);
+    } else {
+        printf("%-5s %-20s %-15s %-10s %-10s\n", 
+               "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
+        printf("------------------------------------------------------------\n");
+        
+        for (int i = 0; i < totalProductos; i++) {
+            Producto *p = &inventario[i];  // Puntero al producto actual
+            
+            // Cambiar color según la cantidad
+            if (p->cantidad < 10) {
+                cambiarColor(12);  // Rojo para stock bajo
+            } else if (p->cantidad < 20) {
+                cambiarColor(14);  // Amarillo para stock medio
+            } else {
+                cambiarColor(10);  // Verde para stock suficiente
+            }
+            
+            printf("%-5d %-20s %-15s %-10d $%-9.2f\n", 
+                   p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+            
+            cambiarColor(7);  // Volver al color normal
+        }
+    }
+    
+    printf("\n");
+    system("pause");
+}
+
+// Función para buscar producto por nombre (uso de cadenas y punteros)
+void buscarProducto(Producto *inventario, int totalProductos) {
+    mostrarEncabezado();
+    
+    cambiarColor(14);
+    printf("=== BUSCAR PRODUCTO ===\n\n");
+    cambiarColor(7);
+    
+    char nombreBuscar[50];
+    printf("Ingrese el nombre del producto a buscar: ");
+    fflush(stdin);
+    fgets(nombreBuscar, 50, stdin);
+    nombreBuscar[strcspn(nombreBuscar, "\n")] = 0;
+    
+    int encontrado = 0;
+    
+    for (int i = 0; i < totalProductos; i++) {
+        Producto *p = &inventario[i];
+        
+        // Usar strstr para buscar coincidencias parciales
+        if (strstr(p->nombre, nombreBuscar) != NULL) {
+            if (!encontrado) {
+                cambiarColor(11);
+                printf("\nResultados de la busqueda:\n");
+                printf("%-5s %-20s %-15s %-10s %-10s\n", 
+                       "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
+                printf("------------------------------------------------------------\n");
+                cambiarColor(7);
+                encontrado = 1;
+            }
+            
+            printf("%-5d %-20s %-15s %-10d $%-9.2f\n", 
+                   p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+        }
+    }
+    
+    if (!encontrado) {
+        cambiarColor(12);
+        printf("\nNo se encontraron productos con ese nombre.\n");
+        cambiarColor(7);
+    }
+    
+    printf("\n");
+    system("pause");
+}
+
+// Función para registrar entrada/salida de productos
+void registrarMovimiento(Producto *inventario, int totalProductos) {
+    mostrarEncabezado();
+    
+    cambiarColor(13);
+    printf("=== REGISTRAR ENTRADA/SALIDA ===\n\n");
+    cambiarColor(7);
+    
+    if (totalProductos == 0) {
+        cambiarColor(12);
+        printf("No hay productos en el inventario.\n");
+        cambiarColor(7);
+        system("pause");
+        return;
+    }
+    
+    mostrarInventario(inventario, totalProductos);
+    
+    int idProducto, cantidad;
+    char tipoMovimiento[10];
+    
+    printf("\nID del producto: ");
+    scanf("%d", &idProducto);
+    
+    if (idProducto < 1 || idProducto > totalProductos) {
+        cambiarColor(12);
+        printf("ID invalido!\n");
+        cambiarColor(7);
+        system("pause");
+        return;
+    }
+    
+    Producto *p = &inventario[idProducto - 1];  // Puntero al producto
+    
+    printf("Tipo de movimiento (entrada/salida): ");
+    scanf("%s", tipoMovimiento);
+    
+    printf("Cantidad: ");
+    scanf("%d", &cantidad);
+    
+    // Actualizar inventario
+    if (strcmp(tipoMovimiento, "entrada") == 0) {
+        p->cantidad += cantidad;
+        cambiarColor(10);
+        printf("\nEntrada registrada exitosamente.\n");
+    } else if (strcmp(tipoMovimiento, "salida") == 0) {
+        if (p->cantidad >= cantidad) {
+            p->cantidad -= cantidad;
+            cambiarColor(10);
+            printf("\nSalida registrada exitosamente.\n");
+        } else {
+            cambiarColor(12);
+            printf("\nError: Stock insuficiente. Disponible: %d\n", p->cantidad);
+        }
+    } else {
+        cambiarColor(12);
+        printf("\nTipo de movimiento invalido!\n");
+    }
+    
+    cambiarColor(7);
+    printf("Stock actual de %s: %d\n", p->nombre, p->cantidad);
+    
+    Sleep(2000);
+}
+
+// Función para mostrar el menú principal
+void mostrarMenu() {
+    cambiarColor(11);  // Cian brillante
+    printf("\n=== MENU PRINCIPAL ===\n");
+    cambiarColor(7);
+    
+    printf("1. Agregar producto\n");
+    printf("2. Mostrar inventario\n");
+    printf("3. Buscar producto\n");
+    printf("4. Registrar entrada/salida\n");
+    printf("5. Informacion del sistema\n");
+    printf("6. Salir\n");
+    
+    cambiarColor(14);  // Amarillo
+    printf("\nSeleccione una opcion: ");
+    cambiarColor(7);
+}
+
+// Función para mostrar información del sistema
+void mostrarInfoSistema() {
+    mostrarEncabezado();
+    
+    cambiarColor(13);
+    printf("=== INFORMACION DEL SISTEMA ===\n\n");
+    cambiarColor(7);
+    
+    printf("Sistema: Gestion de Inventario JK Multiplasticos\n");
+    printf("Desarrollado por: Grupo Nª 7\n");
+    printf("Tutor academico: Ruiz Robalino, Jenny\n");
+    printf("Lenguaje: C\n");
+    printf("Funcionalidades:\n");
+    printf("  - Gestion de envases y plasticos\n");
+    printf("  - Control de entradas y salidas\n");
+    printf("  - Busqueda de productos\n");
+    printf("  - Interfaz con colores\n");
+    
+    printf("\n");
+    system("pause");
+}
+
+int main() {
+    // Configurar la consola para caracteres especiales
+    system("chcp 65001 > nul");
+    
+    // Arreglo de productos (máximo 100 productos)
+    Producto inventario[100];
+    int totalProductos = 0;
+    int opcion;
+    
+    // Mensaje de bienvenida
+    cambiarColor(10);  // Verde
+    printf("=================================================\n");
+    printf("   BIENVENIDO AL SISTEMA DE GESTION DE INVENTARIO\n");
+    printf("             JK MULTIPLASTICOS\n");
+    printf("=================================================\n");
+    cambiarColor(7);
+    Sleep(2000);
+    
+    do {
+        mostrarEncabezado();
+        mostrarMenu();
+        scanf("%d", &opcion);
+        
+        switch(opcion) {
+            case 1:
+                agregarProducto(inventario, &totalProductos);
+                break;
+            case 2:
+                mostrarInventario(inventario, totalProductos);
+                break;
+            case 3:
+                buscarProducto(inventario, totalProductos);
+                break;
+            case 4:
+                registrarMovimiento(inventario, totalProductos);
+                break;
+            case 5:
+                mostrarInfoSistema();
+                break;
+            case 6:
+                mostrarEncabezado();
+                cambiarColor(10);
+                printf("Gracias por usar el sistema de gestion de inventario!\n");
+                printf("Sistema desarrollado para Fundamentos de Programacion\n");
+                cambiarColor(7);
+                Sleep(2000);
+                break;
+            default:
+                cambiarColor(12);
+                printf("\nOpcion invalida! Intente nuevamente.\n");
+                cambiarColor(7);
+                Sleep(1000);
+                break;
+        }
+    } while(opcion != 6);
+    
+    return 0;
+}
