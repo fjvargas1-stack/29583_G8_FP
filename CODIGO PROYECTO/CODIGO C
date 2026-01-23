@@ -2,6 +2,41 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>  // Para cambiar colores en Windows
+#include <conio.h>    // Para getch() (ocultar contraseña)
+
+// ==================== DECLARACIONES DE FUNCIONES ====================
+
+// Funciones de archivos
+int guardarInventario();
+int cargarInventario();
+int guardarUsuarios();
+int cargarUsuarios();
+void exportarInventarioTexto();
+void mostrarReporteInventario();
+
+// Funciones de autenticación
+void encriptarContrasena(char *contrasena);
+void leerContrasena(char *contrasena);
+void inicializarUsuarios();
+int verificarCredenciales(char *usuario, char *contrasena);
+void registrarNuevoUsuario();
+void mostrarUsuarios();
+int iniciarSesion();
+void cambiarContrasena();
+
+// Funciones del sistema
+void cambiarColor(int color);
+void mostrarEncabezado();
+void agregarProducto();
+void mostrarInventario();
+void buscarProducto();
+void registrarMovimiento();
+void mostrarInfoSistema();
+void mostrarMenu();
+void menuGestionUsuarios();
+void menuReportes();
+
+// ==================== ESTRUCTURAS DE DATOS ====================
 
 // Estructura para representar un producto
 typedef struct {
@@ -12,6 +47,431 @@ typedef struct {
     float precio;
 } Producto;
 
+// Estructura para usuarios del sistema
+typedef struct {
+    char usuario[20];
+    char contrasena[50];  // Almacenará hash de contraseña
+    char rol[15];         // "admin" o "empleado"
+    int activo;           // 1=activo, 0=inactivo
+} Usuario;
+
+// ==================== VARIABLES GLOBALES ====================
+
+#define MAX_PRODUCTOS 100
+#define MAX_USUARIOS 10
+#define MAX_INTENTOS 3
+#define PASS_KEY 12345  // Clave simple para "encriptación"
+#define ARCHIVO_INVENTARIO "inventario.dat"
+#define ARCHIVO_USUARIOS "usuarios.dat"
+#define ARCHIVO_BACKUP "backup_inventario.dat"
+
+Producto inventario[MAX_PRODUCTOS];
+Usuario usuarios[MAX_USUARIOS];
+Usuario usuarioActual;
+int totalProductos = 0;
+int totalUsuarios = 0;
+int sesionIniciada = 0;
+
+// ==================== FUNCIONES DE ARCHIVOS ====================
+
+// Función para guardar el inventario en archivo
+int guardarInventario() {
+    FILE *archivo = fopen(ARCHIVO_INVENTARIO, "wb");
+    if (archivo == NULL) {
+        return 0; // Error al abrir archivo
+    }
+    
+    // Guardar el total de productos primero
+    fwrite(&totalProductos, sizeof(int), 1, archivo);
+    
+    // Guardar todos los productos
+    fwrite(inventario, sizeof(Producto), totalProductos, archivo);
+    
+    fclose(archivo);
+    
+    // Crear una copia de seguridad
+    FILE *backup = fopen(ARCHIVO_BACKUP, "wb");
+    if (backup != NULL) {
+        fwrite(&totalProductos, sizeof(int), 1, backup);
+        fwrite(inventario, sizeof(Producto), totalProductos, backup);
+        fclose(backup);
+    }
+    
+    return 1; // Éxito
+}
+
+// Función para cargar el inventario desde archivo
+int cargarInventario() {
+    FILE *archivo = fopen(ARCHIVO_INVENTARIO, "rb");
+    if (archivo == NULL) {
+        return 0; // Archivo no existe
+    }
+    
+    // Leer el total de productos
+    fread(&totalProductos, sizeof(int), 1, archivo);
+    
+    // Leer todos los productos
+    fread(inventario, sizeof(Producto), totalProductos, archivo);
+    
+    fclose(archivo);
+    return 1; // Éxito
+}
+
+// Función para guardar usuarios en archivo
+int guardarUsuarios() {
+    FILE *archivo = fopen(ARCHIVO_USUARIOS, "wb");
+    if (archivo == NULL) {
+        return 0; // Error al abrir archivo
+    }
+    
+    // Guardar el total de usuarios primero
+    fwrite(&totalUsuarios, sizeof(int), 1, archivo);
+    
+    // Guardar todos los usuarios
+    fwrite(usuarios, sizeof(Usuario), totalUsuarios, archivo);
+    
+    fclose(archivo);
+    return 1; // Éxito
+}
+
+// Función para cargar usuarios desde archivo
+int cargarUsuarios() {
+    FILE *archivo = fopen(ARCHIVO_USUARIOS, "rb");
+    if (archivo == NULL) {
+        return 0; // Archivo no existe
+    }
+    
+    // Leer el total de usuarios
+    fread(&totalUsuarios, sizeof(int), 1, archivo);
+    
+    // Leer todos los usuarios
+    fread(usuarios, sizeof(Usuario), totalUsuarios, archivo);
+    
+    fclose(archivo);
+    return 1; // Éxito
+}
+
+// Función para exportar inventario a archivo de texto
+void exportarInventarioTexto() {
+    FILE *archivo = fopen("inventario.txt", "w");
+    if (archivo == NULL) {
+        printf("Error al crear archivo de texto.\n");
+        return;
+    }
+    
+    fprintf(archivo, "=================================================\n");
+    fprintf(archivo, "    INVENTARIO JK MULTIPLASTICOS - EXPORTACION\n");
+    fprintf(archivo, "=================================================\n");
+    fprintf(archivo, "Fecha de exportacion: %s %s\n\n", __DATE__, __TIME__);
+    fprintf(archivo, "%-5s %-20s %-15s %-10s %-10s\n",
+            "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
+    fprintf(archivo, "------------------------------------------------------------\n");
+    
+    for(int i = 0; i < totalProductos; i++) {
+        Producto *p = &inventario[i];
+        fprintf(archivo, "%-5d %-20s %-15s %-10d $%-9.2f\n",
+                p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+    }
+    
+    fprintf(archivo, "\nTotal de productos: %d\n", totalProductos);
+    
+    fclose(archivo);
+    
+    cambiarColor(10);
+    printf("Inventario exportado exitosamente a 'inventario.txt'\n");
+    cambiarColor(7);
+    
+    Sleep(1500);
+}
+
+// Función para mostrar reporte de inventario
+void mostrarReporteInventario() {
+    mostrarEncabezado();
+    
+    cambiarColor(13);
+    printf("=== REPORTE DE INVENTARIO ===\n\n");
+    cambiarColor(7);
+    
+    int totalEnvases = 0;
+    int totalPlasticos = 0;
+    float valorTotal = 0;
+    
+    for(int i = 0; i < totalProductos; i++) {
+        Producto *p = &inventario[i];
+        
+        // Clasificar por tipo
+        if(strcmp(p->tipo, "envase") == 0 || strcmp(p->tipo, "Envase") == 0) {
+            totalEnvases += p->cantidad;
+        } else if(strcmp(p->tipo, "plastico") == 0 || strcmp(p->tipo, "Plastico") == 0) {
+            totalPlasticos += p->cantidad;
+        }
+        
+        // Calcular valor total
+        valorTotal += (p->cantidad * p->precio);
+    }
+    
+    printf("RESUMEN DEL INVENTARIO:\n");
+    printf("=======================\n\n");
+    
+    printf("Total de productos diferentes: %d\n", totalProductos);
+    printf("Total de envases: %d\n", totalEnvases);
+    printf("Total de plasticos: %d\n", totalPlasticos);
+    printf("Valor total del inventario: $%.2f\n\n", valorTotal);
+    
+    printf("Productos con stock bajo (<10 unidades):\n");
+    printf("----------------------------------------\n");
+    
+    int productosBajoStock = 0;
+    for(int i = 0; i < totalProductos; i++) {
+        Producto *p = &inventario[i];
+        if(p->cantidad < 10) {
+            printf("- %s: %d unidades\n", p->nombre, p->cantidad);
+            productosBajoStock++;
+        }
+    }
+    
+    if(productosBajoStock == 0) {
+        printf("Todos los productos tienen stock suficiente.\n");
+    }
+    
+    printf("\n");
+    system("pause");
+}
+
+// ==================== FUNCIONES DE AUTENTICACIÓN ====================
+
+// Función simple de "encriptación" (XOR básico)
+void encriptarContrasena(char *contrasena) {
+    int i;
+    for(i = 0; contrasena[i] != '\0'; i++) {
+        contrasena[i] = contrasena[i] ^ PASS_KEY;
+    }
+}
+
+// Función para leer contraseña sin mostrarla
+void leerContrasena(char *contrasena) {
+    int i = 0;
+    char ch;
+
+    while(1) {
+        ch = getch();
+
+        if(ch == 13) { // Enter
+            contrasena[i] = '\0';
+            break;
+        }
+        else if(ch == 8) { // Backspace
+            if(i > 0) {
+                i--;
+                printf("\b \b");
+            }
+        }
+        else if(ch == 27) { // Escape
+            contrasena[0] = '\0';
+            break;
+        }
+        else if(i < 49) {
+            contrasena[i] = ch;
+            i++;
+            printf("*");
+        }
+    }
+}
+
+// Función para inicializar usuarios por defecto (solo si no hay archivo)
+void inicializarUsuarios() {
+    // Verificar si ya existen usuarios guardados
+    if (cargarUsuarios()) {
+        return; // Ya hay usuarios cargados
+    }
+    
+    // Usuario administrador
+    strcpy(usuarios[0].usuario, "admin");
+    strcpy(usuarios[0].contrasena, "admin123");
+    encriptarContrasena(usuarios[0].contrasena);
+    strcpy(usuarios[0].rol, "admin");
+    usuarios[0].activo = 1;
+
+    // Usuario empleado
+    strcpy(usuarios[1].usuario, "empleado");
+    strcpy(usuarios[1].contrasena, "empleado123");
+    encriptarContrasena(usuarios[1].contrasena);
+    strcpy(usuarios[1].rol, "empleado");
+    usuarios[1].activo = 1;
+
+    totalUsuarios = 2;
+    
+    // Guardar usuarios iniciales
+    guardarUsuarios();
+}
+
+// Función para verificar credenciales
+int verificarCredenciales(char *usuario, char *contrasena) {
+    char contrasenaEncriptada[50];
+    strcpy(contrasenaEncriptada, contrasena);
+    encriptarContrasena(contrasenaEncriptada);
+
+    for(int i = 0; i < totalUsuarios; i++) {
+        if(strcmp(usuarios[i].usuario, usuario) == 0 &&
+           strcmp(usuarios[i].contrasena, contrasenaEncriptada) == 0 &&
+           usuarios[i].activo == 1) {
+            usuarioActual = usuarios[i];
+            return 1; // Credenciales válidas
+        }
+    }
+    return 0; // Credenciales inválidas
+}
+
+// Función para registrar nuevo usuario (solo admin)
+void registrarNuevoUsuario() {
+    if(strcmp(usuarioActual.rol, "admin") != 0) {
+        printf("Acceso denegado. Solo administradores pueden registrar usuarios.\n");
+        Sleep(1500);
+        return;
+    }
+
+    if(totalUsuarios >= MAX_USUARIOS) {
+        printf("Limite de usuarios alcanzado.\n");
+        Sleep(1500);
+        return;
+    }
+
+    system("cls");
+    printf("=== REGISTRAR NUEVO USUARIO ===\n\n");
+
+    printf("Nombre de usuario: ");
+    scanf("%s", usuarios[totalUsuarios].usuario);
+
+    printf("Contrasena: ");
+    leerContrasena(usuarios[totalUsuarios].contrasena);
+    encriptarContrasena(usuarios[totalUsuarios].contrasena);
+
+    printf("\nRol (admin/empleado): ");
+    scanf("%s", usuarios[totalUsuarios].rol);
+
+    usuarios[totalUsuarios].activo = 1;
+    totalUsuarios++;
+
+    // Guardar usuarios después del registro
+    guardarUsuarios();
+
+    printf("\nUsuario registrado exitosamente!\n");
+    Sleep(1500);
+}
+
+// Función para mostrar usuarios (solo admin)
+void mostrarUsuarios() {
+    if(strcmp(usuarioActual.rol, "admin") != 0) {
+        printf("Acceso denegado. Solo administradores pueden ver usuarios.\n");
+        Sleep(1500);
+        return;
+    }
+
+    system("cls");
+    printf("=== LISTA DE USUARIOS ===\n\n");
+    printf("%-15s %-10s %-10s\n", "USUARIO", "ROL", "ESTADO");
+    printf("--------------------------------\n");
+
+    for(int i = 0; i < totalUsuarios; i++) {
+        printf("%-15s %-10s %-10s\n",
+               usuarios[i].usuario,
+               usuarios[i].rol,
+               usuarios[i].activo ? "Activo" : "Inactivo");
+    }
+
+    printf("\n");
+    system("pause");
+}
+
+// Función de inicio de sesión
+int iniciarSesion() {
+    char usuario[20];
+    char contrasena[50];
+    int intentos = 0;
+
+    while(intentos < MAX_INTENTOS) {
+        system("cls");
+        printf("=================================================\n");
+        printf("        SISTEMA DE GESTION DE INVENTARIO\n");
+        printf("             JK MULTIPLASTICOS\n");
+        printf("=================================================\n\n");
+
+        printf("=== INICIO DE SESION ===\n\n");
+
+        printf("Usuario: ");
+        scanf("%s", usuario);
+
+        printf("Contrasena: ");
+        leerContrasena(contrasena);
+
+        if(verificarCredenciales(usuario, contrasena)) {
+            printf("\n\nInicio de sesion exitoso!\n");
+            printf("Bienvenido, %s (%s)\n", usuarioActual.usuario, usuarioActual.rol);
+            sesionIniciada = 1;
+            Sleep(1500);
+            return 1;
+        } else {
+            intentos++;
+            printf("\n\nCredenciales incorrectas. Intentos restantes: %d\n", MAX_INTENTOS - intentos);
+            Sleep(1500);
+        }
+    }
+
+    printf("\nDemasiados intentos fallidos. Sistema bloqueado.\n");
+    Sleep(2000);
+    return 0;
+}
+
+// Función para cambiar contraseña
+void cambiarContrasena() {
+    char contrasenaActual[50];
+    char nuevaContrasena[50];
+    char confirmarContrasena[50];
+
+    system("cls");
+    printf("=== CAMBIAR CONTRASENA ===\n\n");
+
+    printf("Contrasena actual: ");
+    leerContrasena(contrasenaActual);
+
+    // Verificar contraseña actual
+    if(!verificarCredenciales(usuarioActual.usuario, contrasenaActual)) {
+        printf("\nContrasena actual incorrecta.\n");
+        Sleep(1500);
+        return;
+    }
+
+    printf("\nNueva contrasena: ");
+    leerContrasena(nuevaContrasena);
+
+    printf("\nConfirmar nueva contrasena: ");
+    leerContrasena(confirmarContrasena);
+
+    if(strcmp(nuevaContrasena, confirmarContrasena) != 0) {
+        printf("\nLas contrasenas no coinciden.\n");
+        Sleep(1500);
+        return;
+    }
+
+    // Actualizar contraseña del usuario actual
+    for(int i = 0; i < totalUsuarios; i++) {
+        if(strcmp(usuarios[i].usuario, usuarioActual.usuario) == 0) {
+            strcpy(usuarios[i].contrasena, nuevaContrasena);
+            encriptarContrasena(usuarios[i].contrasena);
+            strcpy(usuarioActual.contrasena, usuarios[i].contrasena);
+            break;
+        }
+    }
+
+    // Guardar usuarios después del cambio
+    guardarUsuarios();
+
+    printf("\nContrasena cambiada exitosamente!\n");
+    Sleep(1500);
+}
+
+// ==================== FUNCIONES DEL SISTEMA ====================
+
 // Función para cambiar el color del texto en consola (Windows)
 void cambiarColor(int color) {
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -21,185 +481,215 @@ void cambiarColor(int color) {
 // Función para mostrar el encabezado con colores
 void mostrarEncabezado() {
     system("cls");  // Limpiar pantalla
-    
+
     cambiarColor(11);  // Cian brillante
     printf("=================================================\n");
     printf("    SISTEMA DE GESTION DE INVENTARIO - JK MULTIPLASTICOS\n");
     printf("=================================================\n");
+
+    // Mostrar información del usuario actual
+    cambiarColor(14);
+    printf("Usuario: %s | Rol: %s", usuarioActual.usuario, usuarioActual.rol);
+
+    cambiarColor(11);
+    printf("\n=================================================\n");
     cambiarColor(7);  // Blanco (color normal)
 }
 
 // Función para agregar un producto usando punteros
-void agregarProducto(Producto *inventario, int *totalProductos) {
+void agregarProducto() {
+    if(strcmp(usuarioActual.rol, "empleado") == 0) {
+        printf("Acceso denegado. Solo administradores pueden agregar productos.\n");
+        Sleep(1500);
+        return;
+    }
+
     mostrarEncabezado();
-    
+
     cambiarColor(14);  // Amarillo
     printf("=== AGREGAR NUEVO PRODUCTO ===\n\n");
     cambiarColor(7);
-    
+
+    if(totalProductos >= MAX_PRODUCTOS) {
+        printf("Limite de productos alcanzado.\n");
+        Sleep(1500);
+        return;
+    }
+
     // Usando puntero para acceder al producto actual
-    Producto *nuevo = &inventario[*totalProductos];
-    
-    nuevo->id = *totalProductos + 1;
-    
+    Producto *nuevo = &inventario[totalProductos];
+
+    nuevo->id = totalProductos + 1;
+
     printf("Nombre del producto: ");
     fflush(stdin);
     fgets(nuevo->nombre, 50, stdin);
     // Eliminar salto de línea
     nuevo->nombre[strcspn(nuevo->nombre, "\n")] = 0;
-    
+
     printf("Tipo (envase/plastico): ");
     fgets(nuevo->tipo, 30, stdin);
     nuevo->tipo[strcspn(nuevo->tipo, "\n")] = 0;
-    
+
     printf("Cantidad: ");
     scanf("%d", &nuevo->cantidad);
-    
+
     printf("Precio unitario: ");
     scanf("%f", &nuevo->precio);
+
+    totalProductos++;
     
-    (*totalProductos)++;
-    
+    // Guardar inventario después de agregar producto
+    guardarInventario();
+
     cambiarColor(10);  // Verde
     printf("\nProducto agregado exitosamente!\n");
     cambiarColor(7);
-    
+
     Sleep(1500);  // Pausa de 1.5 segundos
 }
 
 // Función para mostrar inventario usando punteros y cadenas
-void mostrarInventario(Producto *inventario, int totalProductos) {
+void mostrarInventario() {
     mostrarEncabezado();
-    
+
     cambiarColor(13);  // Magenta
     printf("=== INVENTARIO ACTUAL ===\n\n");
     cambiarColor(7);
-    
-    if (totalProductos == 0) {
+
+    if(totalProductos == 0) {
         cambiarColor(12);  // Rojo
         printf("No hay productos en el inventario.\n");
         cambiarColor(7);
     } else {
-        printf("%-5s %-20s %-15s %-10s %-10s\n", 
+        printf("%-5s %-20s %-15s %-10s %-10s\n",
                "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
         printf("------------------------------------------------------------\n");
-        
-        for (int i = 0; i < totalProductos; i++) {
+
+        for(int i = 0; i < totalProductos; i++) {
             Producto *p = &inventario[i];  // Puntero al producto actual
-            
+
             // Cambiar color según la cantidad
-            if (p->cantidad < 10) {
+            if(p->cantidad < 10) {
                 cambiarColor(12);  // Rojo para stock bajo
-            } else if (p->cantidad < 20) {
+            } else if(p->cantidad < 20) {
                 cambiarColor(14);  // Amarillo para stock medio
             } else {
                 cambiarColor(10);  // Verde para stock suficiente
             }
-            
-            printf("%-5d %-20s %-15s %-10d $%-9.2f\n", 
+
+            printf("%-5d %-20s %-15s %-10d $%-9.2f\n",
                    p->id, p->nombre, p->tipo, p->cantidad, p->precio);
-            
+
             cambiarColor(7);  // Volver al color normal
         }
     }
-    
+
     printf("\n");
     system("pause");
 }
 
 // Función para buscar producto por nombre (uso de cadenas y punteros)
-void buscarProducto(Producto *inventario, int totalProductos) {
+void buscarProducto() {
     mostrarEncabezado();
-    
+
     cambiarColor(14);
     printf("=== BUSCAR PRODUCTO ===\n\n");
     cambiarColor(7);
-    
+
     char nombreBuscar[50];
     printf("Ingrese el nombre del producto a buscar: ");
     fflush(stdin);
     fgets(nombreBuscar, 50, stdin);
     nombreBuscar[strcspn(nombreBuscar, "\n")] = 0;
-    
+
     int encontrado = 0;
-    
-    for (int i = 0; i < totalProductos; i++) {
+
+    for(int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
-        
+
         // Usar strstr para buscar coincidencias parciales
-        if (strstr(p->nombre, nombreBuscar) != NULL) {
-            if (!encontrado) {
+        if(strstr(p->nombre, nombreBuscar) != NULL) {
+            if(!encontrado) {
                 cambiarColor(11);
                 printf("\nResultados de la busqueda:\n");
-                printf("%-5s %-20s %-15s %-10s %-10s\n", 
+                printf("%-5s %-20s %-15s %-10s %-10s\n",
                        "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
                 printf("------------------------------------------------------------\n");
                 cambiarColor(7);
                 encontrado = 1;
             }
-            
-            printf("%-5d %-20s %-15s %-10d $%-9.2f\n", 
+
+            printf("%-5d %-20s %-15s %-10d $%-9.2f\n",
                    p->id, p->nombre, p->tipo, p->cantidad, p->precio);
         }
     }
-    
-    if (!encontrado) {
+
+    if(!encontrado) {
         cambiarColor(12);
         printf("\nNo se encontraron productos con ese nombre.\n");
         cambiarColor(7);
     }
-    
+
     printf("\n");
     system("pause");
 }
 
 // Función para registrar entrada/salida de productos
-void registrarMovimiento(Producto *inventario, int totalProductos) {
+void registrarMovimiento() {
     mostrarEncabezado();
-    
+
     cambiarColor(13);
     printf("=== REGISTRAR ENTRADA/SALIDA ===\n\n");
     cambiarColor(7);
-    
-    if (totalProductos == 0) {
+
+    if(totalProductos == 0) {
         cambiarColor(12);
         printf("No hay productos en el inventario.\n");
         cambiarColor(7);
         system("pause");
         return;
     }
-    
-    mostrarInventario(inventario, totalProductos);
-    
+
+    // Mostrar inventario antes de registrar movimiento
+    printf("Inventario actual:\n");
+    printf("%-5s %-20s %-10s\n", "ID", "NOMBRE", "CANTIDAD");
+    printf("----------------------------------------\n");
+
+    for(int i = 0; i < totalProductos; i++) {
+        Producto *p = &inventario[i];
+        printf("%-5d %-20s %-10d\n", p->id, p->nombre, p->cantidad);
+    }
+
     int idProducto, cantidad;
     char tipoMovimiento[10];
-    
+
     printf("\nID del producto: ");
     scanf("%d", &idProducto);
-    
-    if (idProducto < 1 || idProducto > totalProductos) {
+
+    if(idProducto < 1 || idProducto > totalProductos) {
         cambiarColor(12);
         printf("ID invalido!\n");
         cambiarColor(7);
         system("pause");
         return;
     }
-    
+
     Producto *p = &inventario[idProducto - 1];  // Puntero al producto
-    
+
     printf("Tipo de movimiento (entrada/salida): ");
     scanf("%s", tipoMovimiento);
-    
+
     printf("Cantidad: ");
     scanf("%d", &cantidad);
-    
+
     // Actualizar inventario
-    if (strcmp(tipoMovimiento, "entrada") == 0) {
+    if(strcmp(tipoMovimiento, "entrada") == 0) {
         p->cantidad += cantidad;
         cambiarColor(10);
         printf("\nEntrada registrada exitosamente.\n");
-    } else if (strcmp(tipoMovimiento, "salida") == 0) {
-        if (p->cantidad >= cantidad) {
+    } else if(strcmp(tipoMovimiento, "salida") == 0) {
+        if(p->cantidad >= cantidad) {
             p->cantidad -= cantidad;
             cambiarColor(10);
             printf("\nSalida registrada exitosamente.\n");
@@ -211,108 +701,281 @@ void registrarMovimiento(Producto *inventario, int totalProductos) {
         cambiarColor(12);
         printf("\nTipo de movimiento invalido!\n");
     }
-    
+
     cambiarColor(7);
     printf("Stock actual de %s: %d\n", p->nombre, p->cantidad);
     
-    Sleep(2000);
-}
+    // Guardar inventario después del movimiento
+    guardarInventario();
 
-// Función para mostrar el menú principal
-void mostrarMenu() {
-    cambiarColor(11);  // Cian brillante
-    printf("\n=== MENU PRINCIPAL ===\n");
-    cambiarColor(7);
-    
-    printf("1. Agregar producto\n");
-    printf("2. Mostrar inventario\n");
-    printf("3. Buscar producto\n");
-    printf("4. Registrar entrada/salida\n");
-    printf("5. Informacion del sistema\n");
-    printf("6. Salir\n");
-    
-    cambiarColor(14);  // Amarillo
-    printf("\nSeleccione una opcion: ");
-    cambiarColor(7);
+    Sleep(2000);
 }
 
 // Función para mostrar información del sistema
 void mostrarInfoSistema() {
     mostrarEncabezado();
-    
+
     cambiarColor(13);
     printf("=== INFORMACION DEL SISTEMA ===\n\n");
     cambiarColor(7);
-    
+
     printf("Sistema: Gestion de Inventario JK Multiplasticos\n");
+    printf("Version: 2.1 con Guardado de Datos\n");
     printf("Desarrollado por: Grupo Nª 7\n");
     printf("Tutor academico: Ruiz Robalino, Jenny\n");
     printf("Lenguaje: C\n");
-    printf("Funcionalidades:\n");
+    printf("Usuarios registrados: %d\n", totalUsuarios);
+    printf("Productos en inventario: %d\n", totalProductos);
+    printf("\nArchivos de datos:\n");
+    printf("  - %s (inventario)\n", ARCHIVO_INVENTARIO);
+    printf("  - %s (usuarios)\n", ARCHIVO_USUARIOS);
+    printf("  - %s (copia de seguridad)\n", ARCHIVO_BACKUP);
+    printf("\nFuncionalidades:\n");
+    printf("  - Sistema de autenticacion con roles\n");
+    printf("  - Gestion de usuarios (admin)\n");
     printf("  - Gestion de envases y plasticos\n");
     printf("  - Control de entradas y salidas\n");
     printf("  - Busqueda de productos\n");
+    printf("  - Guardado automatico de datos\n");
+    printf("  - Exportacion a texto\n");
+    printf("  - Reportes estadisticos\n");
     printf("  - Interfaz con colores\n");
-    
+
     printf("\n");
     system("pause");
 }
 
+// Función para mostrar el menú principal según el rol
+void mostrarMenu() {
+    cambiarColor(11);  // Cian brillante
+    printf("\n=== MENU PRINCIPAL ===\n");
+    cambiarColor(7);
+
+    printf("1. Mostrar inventario\n");
+    printf("2. Buscar producto\n");
+    printf("3. Registrar entrada/salida\n");
+
+    if(strcmp(usuarioActual.rol, "admin") == 0) {
+        printf("4. Agregar producto\n");
+        printf("5. Gestion de usuarios\n");
+        printf("6. Reporte de inventario\n");
+        printf("7. Exportar a texto\n");
+        printf("8. Informacion del sistema\n");
+        printf("9. Cambiar contrasena\n");
+        printf("10. Cerrar sesion\n");
+        printf("11. Salir del sistema\n");
+    } else {
+        printf("4. Reporte de inventario\n");
+        printf("5. Informacion del sistema\n");
+        printf("6. Cambiar contrasena\n");
+        printf("7. Cerrar sesion\n");
+        printf("8. Salir del sistema\n");
+    }
+
+    cambiarColor(14);  // Amarillo
+    printf("\nSeleccione una opcion: ");
+    cambiarColor(7);
+}
+
+// Función para mostrar menú de gestión de usuarios (solo admin)
+void menuGestionUsuarios() {
+    int opcion;
+
+    do {
+        mostrarEncabezado();
+        printf("=== GESTION DE USUARIOS ===\n\n");
+        printf("1. Registrar nuevo usuario\n");
+        printf("2. Mostrar lista de usuarios\n");
+        printf("3. Volver al menu principal\n");
+        printf("\nSeleccione una opcion: ");
+        scanf("%d", &opcion);
+
+        switch(opcion) {
+            case 1:
+                registrarNuevoUsuario();
+                break;
+            case 2:
+                mostrarUsuarios();
+                break;
+            case 3:
+                return;
+            default:
+                printf("Opcion invalida!\n");
+                Sleep(1000);
+                break;
+        }
+    } while(opcion != 3);
+}
+
+// Función para mostrar menú de reportes (solo admin)
+void menuReportes() {
+    int opcion;
+
+    do {
+        mostrarEncabezado();
+        printf("=== REPORTES Y EXPORTACION ===\n\n");
+        printf("1. Ver reporte de inventario\n");
+        printf("2. Exportar inventario a texto\n");
+        printf("3. Volver al menu principal\n");
+        printf("\nSeleccione una opcion: ");
+        scanf("%d", &opcion);
+
+        switch(opcion) {
+            case 1:
+                mostrarReporteInventario();
+                break;
+            case 2:
+                exportarInventarioTexto();
+                break;
+            case 3:
+                return;
+            default:
+                printf("Opcion invalida!\n");
+                Sleep(1000);
+                break;
+        }
+    } while(opcion != 3);
+}
+
+// ==================== FUNCIÓN PRINCIPAL ====================
+
 int main() {
     // Configurar la consola para caracteres especiales
     system("chcp 65001 > nul");
-    
-    // Arreglo de productos (máximo 100 productos)
-    Producto inventario[100];
-    int totalProductos = 0;
+
+    // Cargar datos existentes
+    cargarInventario();
+    inicializarUsuarios();
+
+    // Intentar inicio de sesión
+    if(!iniciarSesion()) {
+        return 0; // Salir si no se pudo iniciar sesión
+    }
+
+    // Bucle principal del sistema
     int opcion;
-    
-    // Mensaje de bienvenida
-    cambiarColor(10);  // Verde
-    printf("=================================================\n");
-    printf("   BIENVENIDO AL SISTEMA DE GESTION DE INVENTARIO\n");
-    printf("             JK MULTIPLASTICOS\n");
-    printf("=================================================\n");
-    cambiarColor(7);
-    Sleep(2000);
-    
+
     do {
         mostrarEncabezado();
         mostrarMenu();
         scanf("%d", &opcion);
-        
-        switch(opcion) {
-            case 1:
-                agregarProducto(inventario, &totalProductos);
-                break;
-            case 2:
-                mostrarInventario(inventario, totalProductos);
-                break;
-            case 3:
-                buscarProducto(inventario, totalProductos);
-                break;
-            case 4:
-                registrarMovimiento(inventario, totalProductos);
-                break;
-            case 5:
-                mostrarInfoSistema();
-                break;
-            case 6:
-                mostrarEncabezado();
-                cambiarColor(10);
-                printf("Gracias por usar el sistema de gestion de inventario!\n");
-                printf("Sistema desarrollado para Fundamentos de Programacion\n");
-                cambiarColor(7);
-                Sleep(2000);
-                break;
-            default:
-                cambiarColor(12);
-                printf("\nOpcion invalida! Intente nuevamente.\n");
-                cambiarColor(7);
-                Sleep(1000);
-                break;
+
+        if(strcmp(usuarioActual.rol, "admin") == 0) {
+            // Menú para administradores
+            switch(opcion) {
+                case 1:
+                    mostrarInventario();
+                    break;
+                case 2:
+                    buscarProducto();
+                    break;
+                case 3:
+                    registrarMovimiento();
+                    break;
+                case 4:
+                    agregarProducto();
+                    break;
+                case 5:
+                    menuGestionUsuarios();
+                    break;
+                case 6:
+                    menuReportes();
+                    break;
+                case 7:
+                    exportarInventarioTexto();
+                    break;
+                case 8:
+                    mostrarInfoSistema();
+                    break;
+                case 9:
+                    cambiarContrasena();
+                    break;
+                case 10:
+                    // Cerrar sesión
+                    sesionIniciada = 0;
+                    // Guardar datos antes de cerrar sesión
+                    guardarInventario();
+                    guardarUsuarios();
+                    printf("Cerrando sesion...\n");
+                    Sleep(1000);
+                    if(!iniciarSesion()) {
+                        return 0;
+                    }
+                    break;
+                case 11:
+                    // Salir del sistema
+                    mostrarEncabezado();
+                    cambiarColor(10);
+                    printf("Guardando datos...\n");
+                    guardarInventario();
+                    guardarUsuarios();
+                    printf("Datos guardados exitosamente!\n\n");
+                    printf("Gracias por usar el sistema de gestion de inventario!\n");
+                    printf("Sistema desarrollado para Fundamentos de Programacion\n");
+                    cambiarColor(7);
+                    Sleep(2000);
+                    break;
+                default:
+                    cambiarColor(12);
+                    printf("\nOpcion invalida! Intente nuevamente.\n");
+                    cambiarColor(7);
+                    Sleep(1000);
+                    break;
+            }
+        } else {
+            // Menú para empleados
+            switch(opcion) {
+                case 1:
+                    mostrarInventario();
+                    break;
+                case 2:
+                    buscarProducto();
+                    break;
+                case 3:
+                    registrarMovimiento();
+                    break;
+                case 4:
+                    mostrarReporteInventario();
+                    break;
+                case 5:
+                    mostrarInfoSistema();
+                    break;
+                case 6:
+                    cambiarContrasena();
+                    break;
+                case 7:
+                    // Cerrar sesión
+                    sesionIniciada = 0;
+                    // Guardar datos antes de cerrar sesión
+                    guardarInventario();
+                    printf("Cerrando sesion...\n");
+                    Sleep(1000);
+                    if(!iniciarSesion()) {
+                        return 0;
+                    }
+                    break;
+                case 8:
+                    // Salir del sistema
+                    mostrarEncabezado();
+                    cambiarColor(10);
+                    printf("Guardando datos...\n");
+                    guardarInventario();
+                    printf("Datos guardados exitosamente!\n\n");
+                    printf("Gracias por usar el sistema de gestion de inventario!\n");
+                    printf("Sistema desarrollado para Fundamentos de Programacion\n");
+                    cambiarColor(7);
+                    Sleep(2000);
+                    break;
+                default:
+                    cambiarColor(12);
+                    printf("\nOpcion invalida! Intente nuevamente.\n");
+                    cambiarColor(7);
+                    Sleep(1000);
+                    break;
+            }
         }
-    } while(opcion != 6);
-    
+    } while((strcmp(usuarioActual.rol, "admin") == 0 && opcion != 11) ||
+            (strcmp(usuarioActual.rol, "empleado") == 0 && opcion != 8));
+
     return 0;
 }
