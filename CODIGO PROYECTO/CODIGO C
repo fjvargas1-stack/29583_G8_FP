@@ -80,15 +80,15 @@ int guardarInventario() {
     if (archivo == NULL) {
         return 0; // Error al abrir archivo
     }
-    
+
     // Guardar el total de productos primero
     fwrite(&totalProductos, sizeof(int), 1, archivo);
-    
+
     // Guardar todos los productos
     fwrite(inventario, sizeof(Producto), totalProductos, archivo);
-    
+
     fclose(archivo);
-    
+
     // Crear una copia de seguridad
     FILE *backup = fopen(ARCHIVO_BACKUP, "wb");
     if (backup != NULL) {
@@ -96,7 +96,7 @@ int guardarInventario() {
         fwrite(inventario, sizeof(Producto), totalProductos, backup);
         fclose(backup);
     }
-    
+
     return 1; // Éxito
 }
 
@@ -106,13 +106,13 @@ int cargarInventario() {
     if (archivo == NULL) {
         return 0; // Archivo no existe
     }
-    
+
     // Leer el total de productos
     fread(&totalProductos, sizeof(int), 1, archivo);
-    
+
     // Leer todos los productos
     fread(inventario, sizeof(Producto), totalProductos, archivo);
-    
+
     fclose(archivo);
     return 1; // Éxito
 }
@@ -123,13 +123,13 @@ int guardarUsuarios() {
     if (archivo == NULL) {
         return 0; // Error al abrir archivo
     }
-    
+
     // Guardar el total de usuarios primero
     fwrite(&totalUsuarios, sizeof(int), 1, archivo);
-    
+
     // Guardar todos los usuarios
     fwrite(usuarios, sizeof(Usuario), totalUsuarios, archivo);
-    
+
     fclose(archivo);
     return 1; // Éxito
 }
@@ -140,13 +140,13 @@ int cargarUsuarios() {
     if (archivo == NULL) {
         return 0; // Archivo no existe
     }
-    
+
     // Leer el total de usuarios
     fread(&totalUsuarios, sizeof(int), 1, archivo);
-    
+
     // Leer todos los usuarios
     fread(usuarios, sizeof(Usuario), totalUsuarios, archivo);
-    
+
     fclose(archivo);
     return 1; // Éxito
 }
@@ -158,7 +158,7 @@ void exportarInventarioTexto() {
         printf("Error al crear archivo de texto.\n");
         return;
     }
-    
+
     fprintf(archivo, "=================================================\n");
     fprintf(archivo, "    INVENTARIO JK MULTIPLASTICOS - EXPORTACION\n");
     fprintf(archivo, "=================================================\n");
@@ -166,61 +166,61 @@ void exportarInventarioTexto() {
     fprintf(archivo, "%-5s %-20s %-15s %-10s %-10s\n",
             "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
     fprintf(archivo, "------------------------------------------------------------\n");
-    
+
     for(int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
         fprintf(archivo, "%-5d %-20s %-15s %-10d $%-9.2f\n",
                 p->id, p->nombre, p->tipo, p->cantidad, p->precio);
     }
-    
+
     fprintf(archivo, "\nTotal de productos: %d\n", totalProductos);
-    
+
     fclose(archivo);
-    
+
     cambiarColor(10);
     printf("Inventario exportado exitosamente a 'inventario.txt'\n");
     cambiarColor(7);
-    
+
     Sleep(1500);
 }
 
 // Función para mostrar reporte de inventario
 void mostrarReporteInventario() {
     mostrarEncabezado();
-    
+
     cambiarColor(13);
     printf("=== REPORTE DE INVENTARIO ===\n\n");
     cambiarColor(7);
-    
+
     int totalEnvases = 0;
     int totalPlasticos = 0;
     float valorTotal = 0;
-    
+
     for(int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
-        
+
         // Clasificar por tipo
         if(strcmp(p->tipo, "envase") == 0 || strcmp(p->tipo, "Envase") == 0) {
             totalEnvases += p->cantidad;
         } else if(strcmp(p->tipo, "plastico") == 0 || strcmp(p->tipo, "Plastico") == 0) {
             totalPlasticos += p->cantidad;
         }
-        
+
         // Calcular valor total
         valorTotal += (p->cantidad * p->precio);
     }
-    
+
     printf("RESUMEN DEL INVENTARIO:\n");
     printf("=======================\n\n");
-    
+
     printf("Total de productos diferentes: %d\n", totalProductos);
     printf("Total de envases: %d\n", totalEnvases);
     printf("Total de plasticos: %d\n", totalPlasticos);
     printf("Valor total del inventario: $%.2f\n\n", valorTotal);
-    
+
     printf("Productos con stock bajo (<10 unidades):\n");
     printf("----------------------------------------\n");
-    
+
     int productosBajoStock = 0;
     for(int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
@@ -229,11 +229,11 @@ void mostrarReporteInventario() {
             productosBajoStock++;
         }
     }
-    
+
     if(productosBajoStock == 0) {
         printf("Todos los productos tienen stock suficiente.\n");
     }
-    
+
     printf("\n");
     system("pause");
 }
@@ -284,12 +284,12 @@ void inicializarUsuarios() {
     if (cargarUsuarios()) {
         return; // Ya hay usuarios cargados
     }
-    
+
     // Usuario administrador
-    strcpy(usuarios[0].usuario, "admin");
-    strcpy(usuarios[0].contrasena, "admin123");
+    strcpy(usuarios[0].usuario, "Veronica Gordillo");
+    strcpy(usuarios[0].contrasena, "Veronica");
     encriptarContrasena(usuarios[0].contrasena);
-    strcpy(usuarios[0].rol, "admin");
+    strcpy(usuarios[0].rol, "administrador");
     usuarios[0].activo = 1;
 
     // Usuario empleado
@@ -300,7 +300,7 @@ void inicializarUsuarios() {
     usuarios[1].activo = 1;
 
     totalUsuarios = 2;
-    
+
     // Guardar usuarios iniciales
     guardarUsuarios();
 }
@@ -538,7 +538,7 @@ void agregarProducto() {
     scanf("%f", &nuevo->precio);
 
     totalProductos++;
-    
+
     // Guardar inventario después de agregar producto
     guardarInventario();
 
@@ -704,7 +704,7 @@ void registrarMovimiento() {
 
     cambiarColor(7);
     printf("Stock actual de %s: %d\n", p->nombre, p->cantidad);
-    
+
     // Guardar inventario después del movimiento
     guardarInventario();
 
