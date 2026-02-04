@@ -3,9 +3,10 @@
 #include <string.h>
 #include <windows.h>  // Para cambiar colores en Windows
 #include <conio.h>    // Para getch() (ocultar contraseña)
+#include <ctype.h>    // Para isdigit(), isalpha(), tolower()
+#include <time.h>     // Para fechas en reportes
 
 // ==================== DECLARACIONES DE FUNCIONES ====================
-
 // Funciones de archivos
 int guardarInventario();
 int cargarInventario();
@@ -13,6 +14,8 @@ int guardarUsuarios();
 int cargarUsuarios();
 void exportarInventarioTexto();
 void mostrarReporteInventario();
+void crearBackup();
+void restaurarDesdeBackup();
 
 // Funciones de autenticación
 void encriptarContrasena(char *contrasena);
@@ -28,6 +31,8 @@ void cambiarContrasena();
 void cambiarColor(int color);
 void mostrarEncabezado();
 void agregarProducto();
+void modificarProducto();
+void eliminarProducto();
 void mostrarInventario();
 void buscarProducto();
 void registrarMovimiento();
@@ -36,426 +41,664 @@ void mostrarMenu();
 void menuGestionUsuarios();
 void menuReportes();
 
+// Funciones de validación / entrada robusta
+int  validarNumeroPositivoEntero(const char *mensaje);
+float validarNumeroPositivoDecimal(const char *mensaje);
+int  validarSiNo(const char *mensaje);
+
+// Configuración de stock mínimo
+void configurarStockMinimo();
+int  obtenerStockMinimo();
+void guardarConfig();
+void cargarConfig();
+int  contarProductosBajoStock();
+
+// Lecturas robustas (sin duplicar prompt y con validación)
+void leerNombreSoloLetras(const char *mensaje, char *destino, int tam);       // Solo letras y espacios (para usuarios y nombres)
+void leerNombreSoloLetrasOpcional(const char *mensaje, char *destino, int tam);// Igual, pero ENTER mantiene
+void leerLineaRequerida(const char *mensaje, char *destino, int tam);          // Requerida (no vacía), texto libre
+
 // ==================== ESTRUCTURAS DE DATOS ====================
 
-// Estructura para representar un producto
 typedef struct {
-    int id;
-    char nombre[50];
-    char tipo[30];
-    int cantidad;
+    int   id;
+    char  nombre[50];
+    char  tipo[30];
+    int   cantidad;
     float precio;
 } Producto;
 
-// Estructura para usuarios del sistema
 typedef struct {
     char usuario[20];
-    char contrasena[50];  // Almacenará hash de contraseña
-    char rol[15];         // "admin" o "empleado"
-    int activo;           // 1=activo, 0=inactivo
+    char contrasena[50];
+    char rol[15];
+    int  activo;
 } Usuario;
 
-// ==================== VARIABLES GLOBALES ====================
-
 #define MAX_PRODUCTOS 100
-#define MAX_USUARIOS 10
-#define MAX_INTENTOS 3
-#define PASS_KEY 12345  // Clave simple para "encriptación"
+#define MAX_USUARIOS  10
+#define MAX_INTENTOS  3
+#define PASS_KEY      12345
 #define ARCHIVO_INVENTARIO "inventario.dat"
-#define ARCHIVO_USUARIOS "usuarios.dat"
-#define ARCHIVO_BACKUP "backup_inventario.dat"
+#define ARCHIVO_USUARIOS   "usuarios.dat"
+#define ARCHIVO_BACKUP     "backup_inventario.dat"
+#define ARCHIVO_CONFIG     "config.dat"
 
 Producto inventario[MAX_PRODUCTOS];
-Usuario usuarios[MAX_USUARIOS];
-Usuario usuarioActual;
+Usuario  usuarios[MAX_USUARIOS];
+Usuario  usuarioActual;
 int totalProductos = 0;
-int totalUsuarios = 0;
+int totalUsuarios  = 0;
 int sesionIniciada = 0;
+int stockMinimoGlobal = 10;  // Valor por defecto
+
+// ==== Colores solo en bienvenida; errores/alertas SIEMPRE en rojo ====
+int coloresHabilitados = 0; // 0 = sin colores; 1 = habilitados temporalmente (encabezado)
+
+// ==================== UTILIDADES ====================
+
+static void trim(char *s) {
+    // recorta espacios a izquierda y derecha in-place
+    int start = 0;
+    while (s[start] == ' ' || s[start] == '\t') start++;
+    int len = (int)strlen(s);
+    int end = len - 1;
+    while (end >= start && (s[end] == ' ' || s[end] == '\t')) end--;
+    int newLen = (end >= start) ? (end - start + 1) : 0;
+    if (start > 0 && newLen > 0) memmove(s, s + start, (size_t)newLen);
+    s[newLen] = '\0';
+}
+
+// ==================== VALIDACIÓN NUMÉRICA ROBUSTA ====================
+
+int validarNumeroPositivoEntero(const char *mensaje) {
+    char linea[256];
+    for (;;) {
+        printf("%s", mensaje);
+
+        if (!fgets(linea, sizeof(linea), stdin)) {
+            cambiarColor(12); printf("Error: entrada invalida.\n"); cambiarColor(7);
+            continue;
+        }
+        linea[strcspn(linea, "\n")] = '\0';
+        trim(linea);
+
+        if (linea[0] == '\0') {
+            // usuario apretó ENTER: NO permitido aquí
+            cambiarColor(12); printf("Error: debe ingresar un numero entero.\n"); cambiarColor(7);
+            continue;
+        }
+
+        int ok = 1;
+        for (int i = 0; linea[i] != '\0'; i++) {
+            if (!isdigit((unsigned char)linea[i])) { ok = 0; break; }
+        }
+        if (!ok) {
+            cambiarColor(12); printf("Error: solo se permiten numeros enteros.\n"); cambiarColor(7);
+            continue;
+        }
+
+        long val = strtol(linea, NULL, 10);
+        if (val < 0) {
+            cambiarColor(12); printf("Error: no se permiten numeros negativos.\n"); cambiarColor(7);
+            continue;
+        }
+        return (int)val;
+    }
+}
+
+float validarNumeroPositivoDecimal(const char *mensaje) {
+    char linea[256];
+    for (;;) {
+        printf("%s", mensaje);
+
+        if (!fgets(linea, sizeof(linea), stdin)) {
+            cambiarColor(12); printf("Error: entrada invalida.\n"); cambiarColor(7);
+            continue;
+        }
+        linea[strcspn(linea, "\n")] = '\0';
+        trim(linea);
+
+        if (linea[0] == '\0') {
+            cambiarColor(12); printf("Error: debe ingresar un numero.\n"); cambiarColor(7);
+            continue;
+        }
+
+        // permitir un punto o coma decimal
+        int puntos = 0;
+        int ok = 1;
+        for (int i = 0; linea[i] != '\0'; i++) {
+            unsigned char c = (unsigned char)linea[i];
+            if (c == '.' || c == ',') { puntos++; if (puntos > 1) { ok = 0; break; } }
+            else if (!isdigit(c)) { ok = 0; break; }
+        }
+        if (!ok) {
+            cambiarColor(12); printf("Error: solo se permiten numeros (use punto o coma decimal).\n"); cambiarColor(7);
+            continue;
+        }
+
+        // normalizar coma a punto
+        for (int i = 0; linea[i] != '\0'; i++) if (linea[i] == ',') linea[i] = '.';
+
+        double val = strtod(linea, NULL);
+        if (val < 0.0) {
+            cambiarColor(12); printf("Error: no se permiten numeros negativos.\n"); cambiarColor(7);
+            continue;
+        }
+        return (float)val;
+    }
+}
+
+int validarSiNo(const char *mensaje) {
+    char respuesta[16];
+    for (;;) {
+        printf("%s (s/n): ", mensaje);
+        if (!fgets(respuesta, sizeof(respuesta), stdin)) continue;
+        respuesta[strcspn(respuesta, "\n")] = '\0';
+        trim(respuesta);
+        if (strlen(respuesta) == 1) {
+            char c = (char)toupper((unsigned char)respuesta[0]);
+            if (c == 'S') return 1;
+            if (c == 'N') return 0;
+        }
+        cambiarColor(12); printf("Error: responda 's' o 'n'.\n"); cambiarColor(7);
+    }
+}
+
+// ==================== LECTURAS ROBUSTAS (TEXTO) ====================
+
+// Requerido: SOLO letras y espacios (sin números). Evita duplicar prompt.
+void leerNombreSoloLetras(const char *mensaje, char *destino, int tam) {
+    char buffer[256];
+    int mostreError = 0;
+    int mostrarPrompt = 1;
+
+    for (;;) {
+        if (mostrarPrompt) { printf("%s", mensaje); mostrarPrompt = 0; }
+
+        if (!fgets(buffer, sizeof(buffer), stdin)) {
+            if (!mostreError) { continue; }
+            cambiarColor(12); printf("Error: el campo no puede estar vacio.\n"); cambiarColor(7);
+            mostrarPrompt = 1; continue;
+        }
+        buffer[strcspn(buffer, "\n")] = '\0';
+        trim(buffer);
+
+        if (buffer[0] == '\0') {
+            if (!mostreError) { continue; } // traga '\n' pendiente
+            cambiarColor(12); printf("Error: el campo no puede estar vacio.\n"); cambiarColor(7);
+            mostrarPrompt = 1; continue;
+        }
+
+        int invalido = 0;
+        for (int i = 0; buffer[i] != '\0'; i++) {
+            unsigned char c = (unsigned char)buffer[i];
+            if (!(isalpha(c) || c == ' ')) { invalido = 1; break; }
+        }
+        if (invalido) {
+            cambiarColor(12); printf("Error: solo se permiten letras y espacios.\n"); cambiarColor(7);
+            mostreError = 1; mostrarPrompt = 1; continue;
+        }
+
+        strncpy(destino, buffer, (size_t)tam - 1);
+        destino[tam - 1] = '\0';
+        break;
+    }
+}
+
+// OPCIONAL (ENTER mantiene): si hay texto, debe ser solo letras/espacios.
+void leerNombreSoloLetrasOpcional(const char *mensaje, char *destino, int tam) {
+    char buffer[256];
+    printf("%s", mensaje);
+    if (!fgets(buffer, sizeof(buffer), stdin)) return; // mantener
+    buffer[strcspn(buffer, "\n")] = '\0';
+    trim(buffer);
+    if (buffer[0] == '\0') return; // mantener
+
+    int invalido = 0;
+    for (int i = 0; buffer[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)buffer[i];
+        if (!(isalpha(c) || c == ' ')) { invalido = 1; break; }
+    }
+    if (invalido) {
+        cambiarColor(12); printf("Error: solo se permiten letras y espacios. Se mantiene el valor actual.\n"); cambiarColor(7);
+        return;
+    }
+    strncpy(destino, buffer, (size_t)tam - 1);
+    destino[tam - 1] = '\0';
+}
+
+// Requerido: línea no vacía (texto libre).
+void leerLineaRequerida(const char *mensaje, char *destino, int tam) {
+    char buffer[512];
+    int mostreError = 0, mostrarPrompt = 1;
+
+    for (;;) {
+        if (mostrarPrompt) { printf("%s", mensaje); mostrarPrompt = 0; }
+
+        if (!fgets(buffer, sizeof(buffer), stdin)) {
+            if (!mostreError) { continue; }
+            cambiarColor(12); printf("Error: el campo no puede estar vacio.\n"); cambiarColor(7);
+            mostrarPrompt = 1; continue;
+        }
+        buffer[strcspn(buffer, "\n")] = '\0';
+        trim(buffer);
+
+        if (buffer[0] == '\0') {
+            if (!mostreError) { continue; }
+            cambiarColor(12); printf("Error: el campo no puede estar vacio.\n"); cambiarColor(7);
+            mostrarPrompt = 1; continue;
+        }
+        strncpy(destino, buffer, (size_t)tam - 1);
+        destino[tam - 1] = '\0';
+        break;
+    }
+}
 
 // ==================== FUNCIONES DE ARCHIVOS ====================
 
-// Función para guardar el inventario en archivo
 int guardarInventario() {
     FILE *archivo = fopen(ARCHIVO_INVENTARIO, "wb");
-    if (archivo == NULL) {
-        return 0; // Error al abrir archivo
-    }
+    if (archivo == NULL) return 0;
 
-    // Guardar el total de productos primero
     fwrite(&totalProductos, sizeof(int), 1, archivo);
-
-    // Guardar todos los productos
     fwrite(inventario, sizeof(Producto), totalProductos, archivo);
-
     fclose(archivo);
 
-    // Crear una copia de seguridad
-    FILE *backup = fopen(ARCHIVO_BACKUP, "wb");
-    if (backup != NULL) {
-        fwrite(&totalProductos, sizeof(int), 1, backup);
-        fwrite(inventario, sizeof(Producto), totalProductos, backup);
-        fclose(backup);
-    }
-
-    return 1; // Éxito
+    crearBackup();
+    return 1;
 }
 
-// Función para cargar el inventario desde archivo
 int cargarInventario() {
     FILE *archivo = fopen(ARCHIVO_INVENTARIO, "rb");
-    if (archivo == NULL) {
-        return 0; // Archivo no existe
-    }
+    if (archivo == NULL) return 0;
 
-    // Leer el total de productos
     fread(&totalProductos, sizeof(int), 1, archivo);
-
-    // Leer todos los productos
     fread(inventario, sizeof(Producto), totalProductos, archivo);
-
     fclose(archivo);
-    return 1; // Éxito
+    return 1;
 }
 
-// Función para guardar usuarios en archivo
+void crearBackup() {
+    FILE *original = fopen(ARCHIVO_INVENTARIO, "rb");
+    if (original == NULL) return;
+
+    FILE *backup = fopen(ARCHIVO_BACKUP, "wb");
+    if (backup == NULL) { fclose(original); return; }
+
+    const size_t BUFSZ = 4096;
+    char buffer[BUFSZ];
+    size_t n;
+    while ((n = fread(buffer, 1, BUFSZ, original)) > 0) {
+        fwrite(buffer, 1, n, backup);
+    }
+    fclose(original);
+    fclose(backup);
+    guardarConfig();
+}
+
+void restaurarDesdeBackup() {
+    FILE *test = fopen(ARCHIVO_BACKUP, "rb");
+    if (test == NULL) {
+        cambiarColor(12); printf("\nNo se encontro la copia de seguridad (%s).\n", ARCHIVO_BACKUP); cambiarColor(7);
+        Sleep(2000); return;
+    }
+    fclose(test);
+
+    if (!validarSiNo("\n¿Está seguro de restaurar el inventario desde la copia de seguridad?")) {
+        printf("\nOperación cancelada.\n"); Sleep(1000); return;
+    }
+
+    FILE *original = fopen(ARCHIVO_INVENTARIO, "wb");
+    if (original == NULL) { cambiarColor(12); printf("\nError al abrir el archivo de inventario.\n"); cambiarColor(7); Sleep(2000); return; }
+
+    FILE *backup = fopen(ARCHIVO_BACKUP, "rb");
+    if (backup == NULL)  { fclose(original); cambiarColor(12); printf("\nError al abrir la copia de seguridad.\n"); cambiarColor(7); Sleep(2000); return; }
+
+    const size_t BUFSZ = 4096;
+    char buffer[BUFSZ];
+    size_t n;
+    while ((n = fread(buffer, 1, BUFSZ, backup)) > 0) fwrite(buffer, 1, n, original);
+
+    fclose(original);
+    fclose(backup);
+
+    totalProductos = 0;
+    cargarInventario();
+    cargarConfig();
+
+    cambiarColor(10); printf("\n¡Inventario restaurado exitosamente desde la copia de seguridad!\n"); cambiarColor(7);
+    Sleep(2000);
+}
+
+void guardarConfig() {
+    FILE *f = fopen(ARCHIVO_CONFIG, "wb");
+    if (f) { fwrite(&stockMinimoGlobal, sizeof(int), 1, f); fclose(f); }
+}
+
+void cargarConfig() {
+    FILE *f = fopen(ARCHIVO_CONFIG, "rb");
+    if (f) { fread(&stockMinimoGlobal, sizeof(int), 1, f); fclose(f); }
+}
+
 int guardarUsuarios() {
     FILE *archivo = fopen(ARCHIVO_USUARIOS, "wb");
-    if (archivo == NULL) {
-        return 0; // Error al abrir archivo
-    }
-
-    // Guardar el total de usuarios primero
+    if (archivo == NULL) return 0;
     fwrite(&totalUsuarios, sizeof(int), 1, archivo);
-
-    // Guardar todos los usuarios
     fwrite(usuarios, sizeof(Usuario), totalUsuarios, archivo);
-
     fclose(archivo);
-    return 1; // Éxito
+    return 1;
 }
 
-// Función para cargar usuarios desde archivo
 int cargarUsuarios() {
     FILE *archivo = fopen(ARCHIVO_USUARIOS, "rb");
-    if (archivo == NULL) {
-        return 0; // Archivo no existe
-    }
+    if (archivo == NULL) return 0;
 
-    // Leer el total de usuarios
     fread(&totalUsuarios, sizeof(int), 1, archivo);
-
-    // Leer todos los usuarios
     fread(usuarios, sizeof(Usuario), totalUsuarios, archivo);
-
     fclose(archivo);
-    return 1; // Éxito
+
+    // Compatibilidad
+    for (int i = 0; i < totalUsuarios; i++) {
+        if ((strcmp(usuarios[i].usuario, "Veronica") == 0 ||
+             strcmp(usuarios[i].usuario, "Veronica Gordillo") == 0) &&
+            strcmp(usuarios[i].rol, "Gordillo") == 0) {
+            strcpy(usuarios[i].rol, "admin");
+            guardarUsuarios();
+        }
+    }
+    return 1;
 }
 
-// Función para exportar inventario a archivo de texto
 void exportarInventarioTexto() {
-    FILE *archivo = fopen("inventario.txt", "w");
-    if (archivo == NULL) {
-        printf("Error al crear archivo de texto.\n");
-        return;
-    }
+    time_t ahora = time(NULL);
+    struct tm *tlocal = localtime(&ahora);
+    char fecha[64];
+    strftime(fecha, 64, "%d/%m/%Y %H:%M:%S", tlocal);
 
-    fprintf(archivo, "=================================================\n");
-    fprintf(archivo, "    INVENTARIO JK MULTIPLASTICOS - EXPORTACION\n");
-    fprintf(archivo, "=================================================\n");
-    fprintf(archivo, "Fecha de exportacion: %s %s\n\n", __DATE__, __TIME__);
-    fprintf(archivo, "%-5s %-20s %-15s %-10s %-10s\n",
-            "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
-    fprintf(archivo, "------------------------------------------------------------\n");
+    char nombreArchivo[100];
+    sprintf(nombreArchivo, "inventario_exportado_%d%m%Y.txt",
+            tlocal->tm_year + 1900, tlocal->tm_mon + 1, tlocal->tm_mday);
 
-    for(int i = 0; i < totalProductos; i++) {
+    FILE *archivo = fopen(nombreArchivo, "w");
+    if (archivo == NULL) { cambiarColor(12); printf("Error al crear archivo de texto.\n"); cambiarColor(7); return; }
+
+    fprintf(archivo, "================================================================================\n");
+    fprintf(archivo, "       SISTEMA DE GESTION DE INVENTARIO - JK MULTIPLASTICOS - EXPORTACION      \n");
+    fprintf(archivo, "================================================================================\n");
+    fprintf(archivo, "Fecha y hora de exportacion: %s\n", fecha);
+    fprintf(archivo, "Usuario que exporto: %s (%s)\n", usuarioActual.usuario, usuarioActual.rol);
+    fprintf(archivo, "================================================================================\n\n");
+
+    fprintf(archivo, "%-5s %-25s %-15s %-10s %-10s %-15s\n",
+            "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO", "VALOR TOTAL");
+    fprintf(archivo, "----------------------------------------------------------------------------------\n");
+
+    float valorTotalInventario = 0.0f;
+
+    for (int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
-        fprintf(archivo, "%-5d %-20s %-15s %-10d $%-9.2f\n",
-                p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+        float valorTotalProducto = p->cantidad * p->precio;
+        valorTotalInventario += valorTotalProducto;
+
+        if (p->cantidad <= obtenerStockMinimo())
+            fprintf(archivo, "**ALERTA STOCK BAJO** | ");
+        else
+            fprintf(archivo, "                       | ");
+
+        fprintf(archivo, "%-5d %-25s %-15s %-10d $%-9.2f $%-14.2f\n",
+                p->id, p->nombre, p->tipo, p->cantidad, p->precio, valorTotalProducto);
     }
 
-    fprintf(archivo, "\nTotal de productos: %d\n", totalProductos);
+    fprintf(archivo, "----------------------------------------------------------------------------------\n");
+    fprintf(archivo, "TOTALES:                                                                 $%-14.2f\n", valorTotalInventario);
+    fprintf(archivo, "Productos con stock bajo: %d\n", contarProductosBajoStock());
+    fprintf(archivo, "================================================================================\n");
 
     fclose(archivo);
 
-    cambiarColor(10);
-    printf("Inventario exportado exitosamente a 'inventario.txt'\n");
-    cambiarColor(7);
-
-    Sleep(1500);
+    cambiarColor(10); printf("Inventario exportado exitosamente a '%s'\n", nombreArchivo); cambiarColor(7);
+    Sleep(2000);
 }
 
-// Función para mostrar reporte de inventario
+int contarProductosBajoStock() {
+    int contador = 0;
+    for (int i = 0; i < totalProductos; i++)
+        if (inventario[i].cantidad <= obtenerStockMinimo()) contador++;
+    return contador;
+}
+
 void mostrarReporteInventario() {
     mostrarEncabezado();
 
-    cambiarColor(13);
-    printf("=== REPORTE DE INVENTARIO ===\n\n");
+    cambiarColor(13); printf("=== REPORTE DETALLADO DE INVENTARIO ===\n");
+    cambiarColor(14); printf("Stock mínimo configurado: %d unidades\n\n", obtenerStockMinimo());
     cambiarColor(7);
 
-    int totalEnvases = 0;
-    int totalPlasticos = 0;
-    float valorTotal = 0;
-
-    for(int i = 0; i < totalProductos; i++) {
-        Producto *p = &inventario[i];
-
-        // Clasificar por tipo
-        if(strcmp(p->tipo, "envase") == 0 || strcmp(p->tipo, "Envase") == 0) {
-            totalEnvases += p->cantidad;
-        } else if(strcmp(p->tipo, "plastico") == 0 || strcmp(p->tipo, "Plastico") == 0) {
-            totalPlasticos += p->cantidad;
-        }
-
-        // Calcular valor total
-        valorTotal += (p->cantidad * p->precio);
+    if (totalProductos == 0) {
+        cambiarColor(12); printf("No hay productos en el inventario.\n"); cambiarColor(7);
+        system("pause"); return;
     }
 
-    printf("RESUMEN DEL INVENTARIO:\n");
-    printf("=======================\n\n");
+    printf("%-5s %-25s %-15s %-10s %-10s %-15s\n",
+           "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO", "VALOR TOTAL");
+    printf("----------------------------------------------------------------------------------\n");
 
-    printf("Total de productos diferentes: %d\n", totalProductos);
-    printf("Total de envases: %d\n", totalEnvases);
-    printf("Total de plasticos: %d\n", totalPlasticos);
-    printf("Valor total del inventario: $%.2f\n\n", valorTotal);
-
-    printf("Productos con stock bajo (<10 unidades):\n");
-    printf("----------------------------------------\n");
-
+    float valorTotalInventario = 0.0f;
     int productosBajoStock = 0;
-    for(int i = 0; i < totalProductos; i++) {
+
+    for (int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
-        if(p->cantidad < 10) {
-            printf("- %s: %d unidades\n", p->nombre, p->cantidad);
-            productosBajoStock++;
-        }
+        float valorTotalProducto = p->cantidad * p->precio;
+        valorTotalInventario += valorTotalProducto;
+
+        if (p->cantidad <= obtenerStockMinimo()) { cambiarColor(12); productosBajoStock++; }
+        else if (p->cantidad <= (obtenerStockMinimo() * 2)) cambiarColor(14);
+        else cambiarColor(10);
+
+        printf("%-5d %-25s %-15s %-10d $%-9.2f $%-14.2f\n",
+               p->id, p->nombre, p->tipo, p->cantidad, p->precio, valorTotalProducto);
+        cambiarColor(7);
     }
 
-    if(productosBajoStock == 0) {
-        printf("Todos los productos tienen stock suficiente.\n");
+    printf("----------------------------------------------------------------------------------\n");
+    printf("TOTALES:                                                                 $%-14.2f\n", valorTotalInventario);
+    printf("Productos con stock bajo: %d\n", productosBajoStock);
+    printf("================================================================================\n");
+
+    if (productosBajoStock > 0) {
+        cambiarColor(12);
+        printf("\n⚠️  ATENCION: Hay %d producto(s) por debajo del stock mínimo (%d unidades)\n",
+               productosBajoStock, obtenerStockMinimo());
+        printf("¡Recomendado reabastecer inmediatamente!\n");
+        cambiarColor(7);
     }
 
-    printf("\n");
     system("pause");
 }
 
 // ==================== FUNCIONES DE AUTENTICACIÓN ====================
 
-// Función simple de "encriptación" (XOR básico)
 void encriptarContrasena(char *contrasena) {
-    int i;
-    for(i = 0; contrasena[i] != '\0'; i++) {
-        contrasena[i] = contrasena[i] ^ PASS_KEY;
-    }
+    for (int i = 0; contrasena[i] != '\0'; i++) contrasena[i] ^= PASS_KEY;
 }
 
-// Función para leer contraseña sin mostrarla
 void leerContrasena(char *contrasena) {
-    int i = 0;
-    char ch;
-
-    while(1) {
+    int i = 0; char ch;
+    while (1) {
         ch = getch();
-
-        if(ch == 13) { // Enter
-            contrasena[i] = '\0';
-            break;
-        }
-        else if(ch == 8) { // Backspace
-            if(i > 0) {
-                i--;
-                printf("\b \b");
-            }
-        }
-        else if(ch == 27) { // Escape
-            contrasena[0] = '\0';
-            break;
-        }
-        else if(i < 49) {
-            contrasena[i] = ch;
-            i++;
-            printf("*");
-        }
+        if (ch == 13) { contrasena[i] = '\0'; break; }            // Enter
+        else if (ch == 8) { if (i > 0) { i--; printf("\b \b"); } } // Backspace
+        else if (ch == 27) { contrasena[0] = '\0'; break; }        // Escape
+        else if (i < 49) { contrasena[i++] = ch; printf("*"); }
     }
 }
 
-// Función para inicializar usuarios por defecto (solo si no hay archivo)
 void inicializarUsuarios() {
-    // Verificar si ya existen usuarios guardados
     if (cargarUsuarios()) {
-        return; // Ya hay usuarios cargados
-    }
-
-    // Usuario administrador
-    strcpy(usuarios[0].usuario, "Veronica Gordillo");
-    strcpy(usuarios[0].contrasena, "Veronica");
-    encriptarContrasena(usuarios[0].contrasena);
-    strcpy(usuarios[0].rol, "administrador");
-    usuarios[0].activo = 1;
-
-    // Usuario empleado
-    strcpy(usuarios[1].usuario, "empleado");
-    strcpy(usuarios[1].contrasena, "empleado123");
-    encriptarContrasena(usuarios[1].contrasena);
-    strcpy(usuarios[1].rol, "empleado");
-    usuarios[1].activo = 1;
-
-    totalUsuarios = 2;
-
-    // Guardar usuarios iniciales
-    guardarUsuarios();
-}
-
-// Función para verificar credenciales
-int verificarCredenciales(char *usuario, char *contrasena) {
-    char contrasenaEncriptada[50];
-    strcpy(contrasenaEncriptada, contrasena);
-    encriptarContrasena(contrasenaEncriptada);
-
-    for(int i = 0; i < totalUsuarios; i++) {
-        if(strcmp(usuarios[i].usuario, usuario) == 0 &&
-           strcmp(usuarios[i].contrasena, contrasenaEncriptada) == 0 &&
-           usuarios[i].activo == 1) {
-            usuarioActual = usuarios[i];
-            return 1; // Credenciales válidas
+        int idx = -1;
+        for (int i = 0; i < totalUsuarios; i++) {
+            if (strcmp(usuarios[i].usuario, "Veronica Gordillo") == 0 ||
+                strcmp(usuarios[i].usuario, "Veronica") == 0) { idx = i; break; }
         }
+        if (idx == -1) {
+            if (totalUsuarios < MAX_USUARIOS) {
+                idx = totalUsuarios++;
+                strcpy(usuarios[idx].usuario, "Veronica Gordillo");
+                strcpy(usuarios[idx].contrasena, "Vero123"); encriptarContrasena(usuarios[idx].contrasena);
+                strcpy(usuarios[idx].rol, "admin");
+                usuarios[idx].activo = 1; guardarUsuarios();
+            }
+        } else {
+            strcpy(usuarios[idx].usuario, "Veronica Gordillo");
+            strcpy(usuarios[idx].rol, "admin");
+            strcpy(usuarios[idx].contrasena, "Vero123"); encriptarContrasena(usuarios[idx].contrasena);
+            usuarios[idx].activo = 1; guardarUsuarios();
+        }
+        return;
     }
-    return 0; // Credenciales inválidas
+
+    // Usuarios por defecto
+    strcpy(usuarios[0].usuario, "admin");
+    strcpy(usuarios[0].contrasena, "admin123"); encriptarContrasena(usuarios[0].contrasena);
+    strcpy(usuarios[0].rol, "admin"); usuarios[0].activo = 1;
+
+    strcpy(usuarios[1].usuario, "empleado");
+    strcpy(usuarios[1].contrasena, "empleado123"); encriptarContrasena(usuarios[1].contrasena);
+    strcpy(usuarios[1].rol, "empleado"); usuarios[1].activo = 1;
+
+    strcpy(usuarios[2].usuario, "Veronica Gordillo");
+    strcpy(usuarios[2].contrasena, "Vero123"); encriptarContrasena(usuarios[2].contrasena);
+    strcpy(usuarios[2].rol, "admin"); usuarios[2].activo = 1;
+
+    totalUsuarios = 3; guardarUsuarios();
 }
 
-// Función para registrar nuevo usuario (solo admin)
-void registrarNuevoUsuario() {
-    if(strcmp(usuarioActual.rol, "admin") != 0) {
-        printf("Acceso denegado. Solo administradores pueden registrar usuarios.\n");
-        Sleep(1500);
-        return;
+int verificarCredenciales(char *usuario, char *contrasena) {
+    char passEnc[50]; strcpy(passEnc, contrasena); encriptarContrasena(passEnc);
+    for (int i = 0; i < totalUsuarios; i++) {
+        if (strcmp(usuarios[i].usuario, usuario) == 0 &&
+            strcmp(usuarios[i].contrasena, passEnc) == 0 &&
+            usuarios[i].activo == 1) { usuarioActual = usuarios[i]; return 1; }
     }
+    return 0;
+}
 
-    if(totalUsuarios >= MAX_USUARIOS) {
-        printf("Limite de usuarios alcanzado.\n");
-        Sleep(1500);
-        return;
+void registrarNuevoUsuario() {
+    if (strcmp(usuarioActual.rol, "admin") != 0) {
+        cambiarColor(12); printf("Acceso denegado. Solo administradores pueden registrar usuarios.\n"); cambiarColor(7);
+        Sleep(1500); return;
+    }
+    if (totalUsuarios >= MAX_USUARIOS) {
+        cambiarColor(12); printf("Limite de usuarios alcanzado.\n"); cambiarColor(7);
+        Sleep(1500); return;
     }
 
     system("cls");
-    printf("=== REGISTRAR NUEVO USUARIO ===\n\n");
+    mostrarEncabezado();
+    cambiarColor(14); printf("=== REGISTRAR NUEVO USUARIO ===\n\n"); cambiarColor(7);
 
-    printf("Nombre de usuario: ");
-    scanf("%s", usuarios[totalUsuarios].usuario);
+    // SOLO letras y espacios (arreglado)
+    leerNombreSoloLetras("Nombre de usuario: ", usuarios[totalUsuarios].usuario, sizeof(usuarios[totalUsuarios].usuario));
 
     printf("Contrasena: ");
     leerContrasena(usuarios[totalUsuarios].contrasena);
     encriptarContrasena(usuarios[totalUsuarios].contrasena);
 
     printf("\nRol (admin/empleado): ");
-    scanf("%s", usuarios[totalUsuarios].rol);
+    // lectura simple (admin/empleado); si ingresan otra cosa se respeta (como en original)
+    scanf("%14s", usuarios[totalUsuarios].rol);
+    // limpiar \n pendiente para siguientes fgets
+    int c; while ((c = getchar()) != '\n' && c != EOF) {}
 
     usuarios[totalUsuarios].activo = 1;
     totalUsuarios++;
 
-    // Guardar usuarios después del registro
     guardarUsuarios();
 
-    printf("\nUsuario registrado exitosamente!\n");
+    cambiarColor(10); printf("\nUsuario registrado exitosamente!\n"); cambiarColor(7);
     Sleep(1500);
 }
 
-// Función para mostrar usuarios (solo admin)
 void mostrarUsuarios() {
-    if(strcmp(usuarioActual.rol, "admin") != 0) {
-        printf("Acceso denegado. Solo administradores pueden ver usuarios.\n");
-        Sleep(1500);
-        return;
+    if (strcmp(usuarioActual.rol, "admin") != 0) {
+        cambiarColor(12); printf("Acceso denegado. Solo administradores pueden ver usuarios.\n"); cambiarColor(7);
+        Sleep(1500); return;
     }
 
     system("cls");
-    printf("=== LISTA DE USUARIOS ===\n\n");
-    printf("%-15s %-10s %-10s\n", "USUARIO", "ROL", "ESTADO");
-    printf("--------------------------------\n");
+    mostrarEncabezado();
+    cambiarColor(13); printf("=== LISTA DE USUARIOS ===\n\n"); cambiarColor(7);
 
-    for(int i = 0; i < totalUsuarios; i++) {
-        printf("%-15s %-10s %-10s\n",
-               usuarios[i].usuario,
-               usuarios[i].rol,
-               usuarios[i].activo ? "Activo" : "Inactivo");
+    printf("%-20s %-15s %-12s\n", "USUARIO", "ROL", "ESTADO");
+    printf("-------------------------------------\n");
+
+    for (int i = 0; i < totalUsuarios; i++) {
+        printf("%-20s %-15s %-12s\n",
+               usuarios[i].usuario, usuarios[i].rol, usuarios[i].activo ? "Activo" : "Inactivo");
     }
-
-    printf("\n");
-    system("pause");
+    printf("\n"); system("pause");
 }
 
-// Función de inicio de sesión
 int iniciarSesion() {
-    char usuario[20];
-    char contrasena[50];
+    char usuario[64]; char contrasena[50];
     int intentos = 0;
 
-    while(intentos < MAX_INTENTOS) {
+    while (intentos < MAX_INTENTOS) {
         system("cls");
         printf("=================================================\n");
-        printf("        SISTEMA DE GESTION DE INVENTARIO\n");
-        printf("             JK MULTIPLASTICOS\n");
+        printf("        SISTEMA DE GESTION DE INVENTARIO        \n");
+        printf("             JK MULTIPLASTICOS                 \n");
         printf("=================================================\n\n");
 
-        printf("=== INICIO DE SESION ===\n\n");
+        cambiarColor(14); printf("=== INICIO DE SESION ===\n\n"); cambiarColor(7);
 
-        printf("Usuario: ");
-        scanf("%s", usuario);
+        // Usuario: SOLO letras y espacios (arreglado)
+        leerNombreSoloLetras("Usuario: ", usuario, sizeof(usuario));
 
         printf("Contrasena: ");
         leerContrasena(contrasena);
 
-        if(verificarCredenciales(usuario, contrasena)) {
+        if (verificarCredenciales(usuario, contrasena)) {
+            system("cls");
             printf("\n\nInicio de sesion exitoso!\n");
-            printf("Bienvenido, %s (%s)\n", usuarioActual.usuario, usuarioActual.rol);
-            sesionIniciada = 1;
-            Sleep(1500);
-            return 1;
+            printf("Bienvenido/a, %s (%s)\n", usuarioActual.usuario, usuarioActual.rol);
+            sesionIniciada = 1; Sleep(2000); return 1;
         } else {
             intentos++;
-            printf("\n\nCredenciales incorrectas. Intentos restantes: %d\n", MAX_INTENTOS - intentos);
+            cambiarColor(12); printf("\n\nCredenciales incorrectas. Intentos restantes: %d\n", MAX_INTENTOS - intentos); cambiarColor(7);
             Sleep(1500);
         }
     }
 
-    printf("\nDemasiados intentos fallidos. Sistema bloqueado.\n");
-    Sleep(2000);
-    return 0;
+    cambiarColor(12); printf("\nDemasiados intentos fallidos. Sistema bloqueado.\n"); cambiarColor(7);
+    Sleep(2000); return 0;
 }
 
-// Función para cambiar contraseña
 void cambiarContrasena() {
-    char contrasenaActual[50];
-    char nuevaContrasena[50];
-    char confirmarContrasena[50];
+    char contrasenaActual[50], nuevaContrasena[50], confirmarContrasena[50];
 
     system("cls");
-    printf("=== CAMBIAR CONTRASENA ===\n\n");
+    mostrarEncabezado();
+    cambiarColor(14); printf("=== CAMBIAR CONTRASENA ===\n\n"); cambiarColor(7);
 
-    printf("Contrasena actual: ");
-    leerContrasena(contrasenaActual);
+    printf("Contrasena actual: "); leerContrasena(contrasenaActual);
 
-    // Verificar contraseña actual
-    if(!verificarCredenciales(usuarioActual.usuario, contrasenaActual)) {
-        printf("\nContrasena actual incorrecta.\n");
-        Sleep(1500);
-        return;
+    if (!verificarCredenciales(usuarioActual.usuario, contrasenaActual)) {
+        cambiarColor(12); printf("\nContrasena actual incorrecta.\n"); cambiarColor(7);
+        Sleep(1500); return;
     }
 
-    printf("\nNueva contrasena: ");
-    leerContrasena(nuevaContrasena);
+    printf("\nNueva contrasena: "); leerContrasena(nuevaContrasena);
+    printf("\nConfirmar nueva contrasena: "); leerContrasena(confirmarContrasena);
 
-    printf("\nConfirmar nueva contrasena: ");
-    leerContrasena(confirmarContrasena);
-
-    if(strcmp(nuevaContrasena, confirmarContrasena) != 0) {
-        printf("\nLas contrasenas no coinciden.\n");
-        Sleep(1500);
-        return;
+    if (strcmp(nuevaContrasena, confirmarContrasena) != 0) {
+        cambiarColor(12); printf("\nLas contrasenas no coinciden.\n"); cambiarColor(7);
+        Sleep(1500); return;
     }
 
-    // Actualizar contraseña del usuario actual
-    for(int i = 0; i < totalUsuarios; i++) {
-        if(strcmp(usuarios[i].usuario, usuarioActual.usuario) == 0) {
+    for (int i = 0; i < totalUsuarios; i++) {
+        if (strcmp(usuarios[i].usuario, usuarioActual.usuario) == 0) {
             strcpy(usuarios[i].contrasena, nuevaContrasena);
             encriptarContrasena(usuarios[i].contrasena);
             strcpy(usuarioActual.contrasena, usuarios[i].contrasena);
@@ -463,307 +706,358 @@ void cambiarContrasena() {
         }
     }
 
-    // Guardar usuarios después del cambio
     guardarUsuarios();
-
-    printf("\nContrasena cambiada exitosamente!\n");
+    cambiarColor(10); printf("\nContrasena cambiada exitosamente!\n"); cambiarColor(7);
     Sleep(1500);
 }
 
 // ==================== FUNCIONES DEL SISTEMA ====================
 
-// Función para cambiar el color del texto en consola (Windows)
 void cambiarColor(int color) {
+    // Permitir ROJO (12) y reset (7) SIEMPRE; otros colores solo en encabezado
+    if (!coloresHabilitados && color != 12 && color != 7) return;
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     SetConsoleTextAttribute(hConsole, color);
 }
 
-// Función para mostrar el encabezado con colores
 void mostrarEncabezado() {
-    system("cls");  // Limpiar pantalla
+    system("cls");
 
-    cambiarColor(11);  // Cian brillante
+    coloresHabilitados = 1;  // habilitar colores SOLO para el encabezado
+
+    cambiarColor(11);
     printf("=================================================\n");
     printf("    SISTEMA DE GESTION DE INVENTARIO - JK MULTIPLASTICOS\n");
     printf("=================================================\n");
 
-    // Mostrar información del usuario actual
     cambiarColor(14);
     printf("Usuario: %s | Rol: %s", usuarioActual.usuario, usuarioActual.rol);
 
     cambiarColor(11);
     printf("\n=================================================\n");
-    cambiarColor(7);  // Blanco (color normal)
+    cambiarColor(7);
+
+    coloresHabilitados = 0;  // deshabilitar colores para el resto (salvo rojo/reset)
 }
 
-// Función para agregar un producto usando punteros
 void agregarProducto() {
-    if(strcmp(usuarioActual.rol, "empleado") == 0) {
-        printf("Acceso denegado. Solo administradores pueden agregar productos.\n");
-        Sleep(1500);
-        return;
+    if (strcmp(usuarioActual.rol, "admin") != 0) {
+        cambiarColor(12); printf("Acceso denegado. Solo administradores pueden agregar productos.\n"); cambiarColor(7);
+        Sleep(1500); return;
     }
 
     mostrarEncabezado();
+    cambiarColor(14); printf("=== AGREGAR NUEVO PRODUCTO ===\n\n"); cambiarColor(7);
 
-    cambiarColor(14);  // Amarillo
-    printf("=== AGREGAR NUEVO PRODUCTO ===\n\n");
-    cambiarColor(7);
-
-    if(totalProductos >= MAX_PRODUCTOS) {
-        printf("Limite de productos alcanzado.\n");
-        Sleep(1500);
-        return;
+    if (totalProductos >= MAX_PRODUCTOS) {
+        cambiarColor(12); printf("Limite de productos alcanzado.\n"); cambiarColor(7);
+        Sleep(1500); return;
     }
 
-    // Usando puntero para acceder al producto actual
     Producto *nuevo = &inventario[totalProductos];
-
     nuevo->id = totalProductos + 1;
 
-    printf("Nombre del producto: ");
-    fflush(stdin);
-    fgets(nuevo->nombre, 50, stdin);
-    // Eliminar salto de línea
-    nuevo->nombre[strcspn(nuevo->nombre, "\n")] = 0;
+    // Nombre: SOLO letras/espacios (sin duplicar prompt)
+    leerNombreSoloLetras("Nombre del producto: ", nuevo->nombre, sizeof(nuevo->nombre));
 
-    printf("Tipo (envase/plastico): ");
-    fgets(nuevo->tipo, 30, stdin);
-    nuevo->tipo[strcspn(nuevo->tipo, "\n")] = 0;
+    // Tipo: requerido (texto libre)
+    leerLineaRequerida("Tipo (envase/plastico): ", nuevo->tipo, sizeof(nuevo->tipo));
+    for (int i = 0; nuevo->tipo[i]; i++) nuevo->tipo[i] = (char)tolower((unsigned char)nuevo->tipo[i]);
 
-    printf("Cantidad: ");
-    scanf("%d", &nuevo->cantidad);
-
-    printf("Precio unitario: ");
-    scanf("%f", &nuevo->precio);
+    // Cantidad / Precio: validación numérica robusta (no acepta letras)
+    nuevo->cantidad = validarNumeroPositivoEntero("Cantidad: ");
+    nuevo->precio   = validarNumeroPositivoDecimal("Precio unitario: ");
 
     totalProductos++;
-
-    // Guardar inventario después de agregar producto
     guardarInventario();
 
-    cambiarColor(10);  // Verde
-    printf("\nProducto agregado exitosamente!\n");
-    cambiarColor(7);
-
-    Sleep(1500);  // Pausa de 1.5 segundos
+    cambiarColor(10); printf("\nProducto agregado exitosamente!\n"); cambiarColor(7);
+    Sleep(1500);
 }
 
-// Función para mostrar inventario usando punteros y cadenas
-void mostrarInventario() {
+void modificarProducto() {
+    if (strcmp(usuarioActual.rol, "admin") != 0) {
+        cambiarColor(12); printf("Acceso denegado. Solo administradores pueden modificar productos.\n"); cambiarColor(7);
+        Sleep(1500); return;
+    }
+
+    if (totalProductos == 0) {
+        cambiarColor(12); printf("No hay productos para modificar.\n"); cambiarColor(7);
+        Sleep(1500); return;
+    }
+
+    mostrarInventario();
+
+    int id = validarNumeroPositivoEntero("\nID del producto a modificar: ");
+    if (id < 1 || id > totalProductos) {
+        cambiarColor(12); printf("ID invalido!\n"); cambiarColor(7); Sleep(1500); return;
+    }
+
+    Producto *p = &inventario[id - 1];
+
+    system("cls");
     mostrarEncabezado();
+    cambiarColor(14); printf("=== MODIFICAR PRODUCTO (ID: %d) ===\n\n", p->id); cambiarColor(7);
 
-    cambiarColor(13);  // Magenta
-    printf("=== INVENTARIO ACTUAL ===\n\n");
-    cambiarColor(7);
+    printf("Nombre actual: %s\n", p->nombre);
+    leerNombreSoloLetrasOpcional("Nuevo nombre (ENTER para mantener): ", p->nombre, sizeof(p->nombre));
 
-    if(totalProductos == 0) {
-        cambiarColor(12);  // Rojo
-        printf("No hay productos en el inventario.\n");
-        cambiarColor(7);
-    } else {
-        printf("%-5s %-20s %-15s %-10s %-10s\n",
-               "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
-        printf("------------------------------------------------------------\n");
-
-        for(int i = 0; i < totalProductos; i++) {
-            Producto *p = &inventario[i];  // Puntero al producto actual
-
-            // Cambiar color según la cantidad
-            if(p->cantidad < 10) {
-                cambiarColor(12);  // Rojo para stock bajo
-            } else if(p->cantidad < 20) {
-                cambiarColor(14);  // Amarillo para stock medio
-            } else {
-                cambiarColor(10);  // Verde para stock suficiente
+    printf("\nTipo actual: %s\n", p->tipo);
+    {
+        char nuevoTipo[30];
+        printf("Nuevo tipo (envase/plastico) (ENTER para mantener): ");
+        if (fgets(nuevoTipo, sizeof(nuevoTipo), stdin)) {
+            nuevoTipo[strcspn(nuevoTipo, "\n")] = '\0'; trim(nuevoTipo);
+            if (nuevoTipo[0] != '\0') {
+                for (int i = 0; nuevoTipo[i]; i++) nuevoTipo[i] = (char)tolower((unsigned char)nuevoTipo[i]);
+                if (strcmp(nuevoTipo, "envase") == 0 || strcmp(nuevoTipo, "plastico") == 0) {
+                    strcpy(p->tipo, nuevoTipo);
+                } else {
+                    cambiarColor(12); printf("Tipo no valido. Se mantiene el tipo actual.\n"); cambiarColor(7);
+                }
             }
-
-            printf("%-5d %-20s %-15s %-10d $%-9.2f\n",
-                   p->id, p->nombre, p->tipo, p->cantidad, p->precio);
-
-            cambiarColor(7);  // Volver al color normal
         }
     }
 
-    printf("\n");
+    printf("\nCantidad actual: %d\n", p->cantidad);
+    p->cantidad = validarNumeroPositivoEntero("Nueva cantidad: ");
+
+    printf("\nPrecio actual: $%.2f\n", p->precio);
+    p->precio = validarNumeroPositivoDecimal("Nuevo precio: ");
+
+    guardarInventario();
+
+    cambiarColor(10); printf("\nProducto modificado exitosamente!\n"); cambiarColor(7);
+    Sleep(1500);
+}
+
+void eliminarProducto() {
+    if (strcmp(usuarioActual.rol, "admin") != 0) {
+        cambiarColor(12); printf("Acceso denegado. Solo administradores pueden eliminar productos.\n"); cambiarColor(7);
+        Sleep(1500); return;
+    }
+
+    if (totalProductos == 0) {
+        cambiarColor(12); printf("No hay productos para eliminar.\n"); cambiarColor(7);
+        Sleep(1500); return;
+    }
+
+    mostrarInventario();
+
+    int id = validarNumeroPositivoEntero("\nID del producto a ELIMINAR: ");
+    if (id < 1 || id > totalProductos) {
+        cambiarColor(12); printf("ID invalido!\n"); cambiarColor(7); Sleep(1500); return;
+    }
+
+    Producto *p = &inventario[id - 1];
+
+    char mensaje[200];
+    sprintf(mensaje, "\n¿Está seguro de eliminar el producto '%s'?", p->nombre);
+
+    if (!validarSiNo(mensaje)) { printf("\nOperación cancelada.\n"); Sleep(1000); return; }
+
+    for (int i = id - 1; i < totalProductos - 1; i++) { inventario[i] = inventario[i + 1]; inventario[i].id = i + 1; }
+    totalProductos--;
+
+    guardarInventario();
+
+    cambiarColor(10); printf("\nProducto eliminado exitosamente!\n"); cambiarColor(7);
+    Sleep(1500);
+}
+
+void mostrarInventario() {
+    mostrarEncabezado();
+
+    cambiarColor(13); printf("=== INVENTARIO ACTUAL ===\n");
+    cambiarColor(14); printf("Stock mínimo configurado: %d unidades\n\n", obtenerStockMinimo());
+    cambiarColor(7);
+
+    if (totalProductos == 0) {
+        cambiarColor(12); printf("No hay productos en el inventario.\n"); cambiarColor(7);
+        system("pause"); return;
+    }
+
+    printf("%-5s %-25s %-15s %-10s %-10s\n", "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
+    printf("------------------------------------------------------------\n");
+
+    for (int i = 0; i < totalProductos; i++) {
+        Producto *p = &inventario[i];
+
+        if (p->cantidad <= obtenerStockMinimo()) cambiarColor(12);
+        else if (p->cantidad <= (obtenerStockMinimo() * 2)) cambiarColor(14);
+        else cambiarColor(10);
+
+        printf("%-5d %-25s %-15s %-10d $%-9.2f\n",
+               p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+        cambiarColor(7);
+    }
+
+    int productosBajoStock = contarProductosBajoStock();
+    if (productosBajoStock > 0) {
+        cambiarColor(12); printf("\n⚠️  ATENCION: %d producto(s) con stock bajo (≤%d unidades)\n",
+               productosBajoStock, obtenerStockMinimo()); cambiarColor(7);
+    }
+
     system("pause");
 }
 
-// Función para buscar producto por nombre (uso de cadenas y punteros)
 void buscarProducto() {
     mostrarEncabezado();
 
-    cambiarColor(14);
-    printf("=== BUSCAR PRODUCTO ===\n\n");
-    cambiarColor(7);
+    cambiarColor(14); printf("=== BUSCAR PRODUCTO ===\n\n"); cambiarColor(7);
 
     char nombreBuscar[50];
-    printf("Ingrese el nombre del producto a buscar: ");
-    fflush(stdin);
-    fgets(nombreBuscar, 50, stdin);
-    nombreBuscar[strcspn(nombreBuscar, "\n")] = 0;
+    // Puedes buscar por letras/espacios (igual que nombres de producto)
+    leerNombreSoloLetras("Ingrese el nombre del producto a buscar: ", nombreBuscar, sizeof(nombreBuscar));
 
     int encontrado = 0;
-
-    for(int i = 0; i < totalProductos; i++) {
+    for (int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
-
-        // Usar strstr para buscar coincidencias parciales
-        if(strstr(p->nombre, nombreBuscar) != NULL) {
-            if(!encontrado) {
+        if (strstr(p->nombre, nombreBuscar) != NULL) {
+            if (!encontrado) {
                 cambiarColor(11);
                 printf("\nResultados de la busqueda:\n");
-                printf("%-5s %-20s %-15s %-10s %-10s\n",
-                       "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
+                printf("%-5s %-25s %-15s %-10s %-10s\n", "ID", "NOMBRE", "TIPO", "CANTIDAD", "PRECIO");
                 printf("------------------------------------------------------------\n");
                 cambiarColor(7);
                 encontrado = 1;
             }
-
-            printf("%-5d %-20s %-15s %-10d $%-9.2f\n",
-                   p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+            if (p->cantidad <= obtenerStockMinimo()) cambiarColor(12); else cambiarColor(10);
+            printf("%-5d %-25s %-15s %-10d $%-9.2f\n", p->id, p->nombre, p->tipo, p->cantidad, p->precio);
+            cambiarColor(7);
         }
     }
 
-    if(!encontrado) {
-        cambiarColor(12);
-        printf("\nNo se encontraron productos con ese nombre.\n");
-        cambiarColor(7);
-    }
+    if (!encontrado) { cambiarColor(12); printf("\nNo se encontraron productos con ese nombre.\n"); cambiarColor(7); }
 
-    printf("\n");
-    system("pause");
+    printf("\n"); system("pause");
 }
 
-// Función para registrar entrada/salida de productos
 void registrarMovimiento() {
     mostrarEncabezado();
 
-    cambiarColor(13);
-    printf("=== REGISTRAR ENTRADA/SALIDA ===\n\n");
-    cambiarColor(7);
+    cambiarColor(13); printf("=== REGISTRAR ENTRADA/SALIDA ===\n\n"); cambiarColor(7);
 
-    if(totalProductos == 0) {
-        cambiarColor(12);
-        printf("No hay productos en el inventario.\n");
-        cambiarColor(7);
-        system("pause");
-        return;
+    if (totalProductos == 0) {
+        cambiarColor(12); printf("No hay productos en el inventario.\n"); cambiarColor(7);
+        system("pause"); return;
     }
 
-    // Mostrar inventario antes de registrar movimiento
     printf("Inventario actual:\n");
-    printf("%-5s %-20s %-10s\n", "ID", "NOMBRE", "CANTIDAD");
+    printf("%-5s %-25s %-10s\n", "ID", "NOMBRE", "CANTIDAD");
     printf("----------------------------------------\n");
-
-    for(int i = 0; i < totalProductos; i++) {
+    for (int i = 0; i < totalProductos; i++) {
         Producto *p = &inventario[i];
-        printf("%-5d %-20s %-10d\n", p->id, p->nombre, p->cantidad);
+        printf("%-5d %-25s %-10d\n", p->id, p->nombre, p->cantidad);
     }
 
-    int idProducto, cantidad;
-    char tipoMovimiento[10];
-
-    printf("\nID del producto: ");
-    scanf("%d", &idProducto);
-
-    if(idProducto < 1 || idProducto > totalProductos) {
-        cambiarColor(12);
-        printf("ID invalido!\n");
-        cambiarColor(7);
-        system("pause");
-        return;
+    int idProducto = validarNumeroPositivoEntero("\nID del producto: ");
+    if (idProducto < 1 || idProducto > totalProductos) {
+        cambiarColor(12); printf("ID invalido!\n"); cambiarColor(7); system("pause"); return;
     }
 
-    Producto *p = &inventario[idProducto - 1];  // Puntero al producto
+    Producto *p = &inventario[idProducto - 1];
 
-    printf("Tipo de movimiento (entrada/salida): ");
-    scanf("%s", tipoMovimiento);
+    char tipoMovimiento[16];
+    leerLineaRequerida("Tipo de movimiento (entrada/salida): ", tipoMovimiento, sizeof(tipoMovimiento));
+    for (int i = 0; tipoMovimiento[i]; i++) tipoMovimiento[i] = (char)tolower((unsigned char)tipoMovimiento[i]);
 
-    printf("Cantidad: ");
-    scanf("%d", &cantidad);
+    int cantidad = validarNumeroPositivoEntero("Cantidad: ");
 
-    // Actualizar inventario
-    if(strcmp(tipoMovimiento, "entrada") == 0) {
-        p->cantidad += cantidad;
-        cambiarColor(10);
-        printf("\nEntrada registrada exitosamente.\n");
-    } else if(strcmp(tipoMovimiento, "salida") == 0) {
-        if(p->cantidad >= cantidad) {
-            p->cantidad -= cantidad;
-            cambiarColor(10);
-            printf("\nSalida registrada exitosamente.\n");
-        } else {
+    if (strcmp(tipoMovimiento, "salida") == 0 && p->cantidad < cantidad) {
+        cambiarColor(12); printf("\nError: Stock insuficiente. Disponible: %d\n", p->cantidad); cambiarColor(7);
+        system("pause"); return;
+    }
+
+    if (strcmp(tipoMovimiento, "entrada") == 0) {
+        p->cantidad += cantidad; cambiarColor(10); printf("\nEntrada registrada exitosamente.\n");
+    } else if (strcmp(tipoMovimiento, "salida") == 0) {
+        p->cantidad -= cantidad; cambiarColor(10); printf("\nSalida registrada exitosamente.\n");
+        if (p->cantidad <= obtenerStockMinimo()) {
             cambiarColor(12);
-            printf("\nError: Stock insuficiente. Disponible: %d\n", p->cantidad);
+            printf("⚠️  ATENCION: El producto '%s' ahora tiene SOLO %d unidades (stock mínimo: %d)\n",
+                   p->nombre, p->cantidad, obtenerStockMinimo());
+            cambiarColor(7);
         }
     } else {
-        cambiarColor(12);
-        printf("\nTipo de movimiento invalido!\n");
+        cambiarColor(12); printf("\nTipo de movimiento invalido!\n"); cambiarColor(7);
+        system("pause"); return;
     }
 
-    cambiarColor(7);
-    printf("Stock actual de %s: %d\n", p->nombre, p->cantidad);
-
-    // Guardar inventario después del movimiento
-    guardarInventario();
-
-    Sleep(2000);
+    cambiarColor(7); printf("Stock actual de %s: %d\n", p->nombre, p->cantidad);
+    guardarInventario(); Sleep(2000);
 }
 
-// Función para mostrar información del sistema
 void mostrarInfoSistema() {
     mostrarEncabezado();
 
-    cambiarColor(13);
-    printf("=== INFORMACION DEL SISTEMA ===\n\n");
-    cambiarColor(7);
+    cambiarColor(13); printf("=== INFORMACION DEL SISTEMA ===\n\n"); cambiarColor(7);
 
     printf("Sistema: Gestion de Inventario JK Multiplasticos\n");
-    printf("Version: 2.1 con Guardado de Datos\n");
+    printf("Version: 3.0 - Completa con Backup y Alertas\n");
     printf("Desarrollado por: Grupo Nª 7\n");
     printf("Tutor academico: Ruiz Robalino, Jenny\n");
     printf("Lenguaje: C\n");
     printf("Usuarios registrados: %d\n", totalUsuarios);
     printf("Productos en inventario: %d\n", totalProductos);
+    printf("Stock mínimo configurado: %d unidades\n", obtenerStockMinimo());
     printf("\nArchivos de datos:\n");
     printf("  - %s (inventario)\n", ARCHIVO_INVENTARIO);
     printf("  - %s (usuarios)\n", ARCHIVO_USUARIOS);
     printf("  - %s (copia de seguridad)\n", ARCHIVO_BACKUP);
+    printf("  - %s (configuración)\n", ARCHIVO_CONFIG);
     printf("\nFuncionalidades:\n");
     printf("  - Sistema de autenticacion con roles\n");
-    printf("  - Gestion de usuarios (admin)\n");
-    printf("  - Gestion de envases y plasticos\n");
-    printf("  - Control de entradas y salidas\n");
+    printf("  - Gestion completa de usuarios (admin)\n");
+    printf("  - Gestion de envases y plasticos (agregar, modificar, eliminar)\n");
+    printf("  - Control de entradas y salidas con alertas de stock bajo\n");
     printf("  - Busqueda de productos\n");
-    printf("  - Guardado automatico de datos\n");
-    printf("  - Exportacion a texto\n");
-    printf("  - Reportes estadisticos\n");
-    printf("  - Interfaz con colores\n");
+    printf("  - Guardado automatico y copias de seguridad\n");
+    printf("  - Exportacion de reportes a texto con formato detallado\n");
+    printf("  - Reportes estadisticos con colores y alertas visuales\n");
+    printf("  - Restauracion de datos desde backup\n");
+    printf("  - Configuracion de stock mínimo\n");
+    printf("  - Interfaz con colores y validacion de datos avanzada\n");
 
-    printf("\n");
-    system("pause");
+    printf("\n"); system("pause");
 }
 
-// Función para mostrar el menú principal según el rol
+void configurarStockMinimo() {
+    if (strcmp(usuarioActual.rol, "admin") != 0) {
+        cambiarColor(12); printf("Acceso denegado. Solo administradores pueden configurar el stock mínimo.\n"); cambiarColor(7);
+        Sleep(2000); return;
+    }
+
+    system("cls"); mostrarEncabezado();
+    cambiarColor(14); printf("=== CONFIGURAR STOCK MINIMO ===\n\n"); cambiarColor(7);
+
+    stockMinimoGlobal = validarNumeroPositivoEntero("Ingrese el nuevo stock mínimo: ");
+    guardarConfig();
+
+    cambiarColor(10); printf("\nStock mínimo actualizado a: %d\n", stockMinimoGlobal); cambiarColor(7);
+    Sleep(2000);
+}
+
+int obtenerStockMinimo() { return stockMinimoGlobal; }
+
 void mostrarMenu() {
-    cambiarColor(11);  // Cian brillante
-    printf("\n=== MENU PRINCIPAL ===\n");
-    cambiarColor(7);
+    cambiarColor(11); printf("\n=== MENU PRINCIPAL ===\n"); cambiarColor(7);
 
     printf("1. Mostrar inventario\n");
     printf("2. Buscar producto\n");
     printf("3. Registrar entrada/salida\n");
 
-    if(strcmp(usuarioActual.rol, "admin") == 0) {
+    if (strcmp(usuarioActual.rol, "admin") == 0) {
         printf("4. Agregar producto\n");
-        printf("5. Gestion de usuarios\n");
-        printf("6. Reporte de inventario\n");
-        printf("7. Exportar a texto\n");
-        printf("8. Informacion del sistema\n");
-        printf("9. Cambiar contrasena\n");
-        printf("10. Cerrar sesion\n");
-        printf("11. Salir del sistema\n");
+        printf("5. Eliminar producto\n");
+        printf("6. Gestion de usuarios\n");
+        printf("7. Reporte de inventario\n");
+        printf("8. Exportar a texto\n");
+        printf("9. Configurar stock mínimo\n");
+        printf("10. Informacion del sistema\n");
+        printf("11. Cambiar contrasena\n");
+        printf("12. Cerrar sesion\n");
+        printf("13. Salir del sistema\n");
     } else {
         printf("4. Reporte de inventario\n");
         printf("5. Informacion del sistema\n");
@@ -772,15 +1066,11 @@ void mostrarMenu() {
         printf("8. Salir del sistema\n");
     }
 
-    cambiarColor(14);  // Amarillo
-    printf("\nSeleccione una opcion: ");
-    cambiarColor(7);
+    cambiarColor(14); printf("\nSeleccione una opcion: "); cambiarColor(7);
 }
 
-// Función para mostrar menú de gestión de usuarios (solo admin)
 void menuGestionUsuarios() {
     int opcion;
-
     do {
         mostrarEncabezado();
         printf("=== GESTION DE USUARIOS ===\n\n");
@@ -789,28 +1079,20 @@ void menuGestionUsuarios() {
         printf("3. Volver al menu principal\n");
         printf("\nSeleccione una opcion: ");
         scanf("%d", &opcion);
+        int c; while ((c = getchar()) != '\n' && c != EOF) {} // limpiar resto de línea
 
-        switch(opcion) {
-            case 1:
-                registrarNuevoUsuario();
-                break;
-            case 2:
-                mostrarUsuarios();
-                break;
-            case 3:
-                return;
+        switch (opcion) {
+            case 1: registrarNuevoUsuario(); break;
+            case 2: mostrarUsuarios(); break;
+            case 3: return;
             default:
-                printf("Opcion invalida!\n");
-                Sleep(1000);
-                break;
+                cambiarColor(12); printf("Opcion invalida!\n"); cambiarColor(7); Sleep(1000);
         }
-    } while(opcion != 3);
+    } while (opcion != 3);
 }
 
-// Función para mostrar menú de reportes (solo admin)
 void menuReportes() {
     int opcion;
-
     do {
         mostrarEncabezado();
         printf("=== REPORTES Y EXPORTACION ===\n\n");
@@ -819,163 +1101,86 @@ void menuReportes() {
         printf("3. Volver al menu principal\n");
         printf("\nSeleccione una opcion: ");
         scanf("%d", &opcion);
+        int c; while ((c = getchar()) != '\n' && c != EOF) {}
 
-        switch(opcion) {
-            case 1:
-                mostrarReporteInventario();
-                break;
-            case 2:
-                exportarInventarioTexto();
-                break;
-            case 3:
-                return;
+        switch (opcion) {
+            case 1: mostrarReporteInventario(); break;
+            case 2: exportarInventarioTexto(); break;
+            case 3: return;
             default:
-                printf("Opcion invalida!\n");
-                Sleep(1000);
-                break;
+                cambiarColor(12); printf("Opcion invalida!\n"); cambiarColor(7); Sleep(1000);
         }
-    } while(opcion != 3);
+    } while (opcion != 3);
 }
 
 // ==================== FUNCIÓN PRINCIPAL ====================
 
 int main() {
-    // Configurar la consola para caracteres especiales
     system("chcp 65001 > nul");
 
-    // Cargar datos existentes
     cargarInventario();
-    inicializarUsuarios();
+    inicializarUsuarios();  // Garantiza "Veronica Gordillo" (admin) con "Vero123"
+    cargarConfig();
 
-    // Intentar inicio de sesión
-    if(!iniciarSesion()) {
-        return 0; // Salir si no se pudo iniciar sesión
-    }
+    if (!iniciarSesion()) return 0;
 
-    // Bucle principal del sistema
     int opcion;
-
     do {
         mostrarEncabezado();
         mostrarMenu();
         scanf("%d", &opcion);
+        int c; while ((c = getchar()) != '\n' && c != EOF) {}
 
-        if(strcmp(usuarioActual.rol, "admin") == 0) {
-            // Menú para administradores
-            switch(opcion) {
-                case 1:
-                    mostrarInventario();
-                    break;
-                case 2:
-                    buscarProducto();
-                    break;
-                case 3:
-                    registrarMovimiento();
-                    break;
-                case 4:
-                    agregarProducto();
-                    break;
-                case 5:
-                    menuGestionUsuarios();
-                    break;
-                case 6:
-                    menuReportes();
-                    break;
-                case 7:
-                    exportarInventarioTexto();
-                    break;
-                case 8:
-                    mostrarInfoSistema();
-                    break;
-                case 9:
-                    cambiarContrasena();
-                    break;
-                case 10:
-                    // Cerrar sesión
+        if (strcmp(usuarioActual.rol, "admin") == 0) {
+            switch (opcion) {
+                case 1: mostrarInventario(); break;
+                case 2: buscarProducto(); break;
+                case 3: registrarMovimiento(); break;
+                case 4: agregarProducto(); break;
+                case 5: eliminarProducto(); break;
+                case 6: menuGestionUsuarios(); break;
+                case 7: mostrarReporteInventario(); break;
+                case 8: exportarInventarioTexto(); break;
+                case 9: configurarStockMinimo(); break;
+                case 10: mostrarInfoSistema(); break;
+                case 11: cambiarContrasena(); break;
+                case 12:
                     sesionIniciada = 0;
-                    // Guardar datos antes de cerrar sesión
-                    guardarInventario();
-                    guardarUsuarios();
-                    printf("Cerrando sesion...\n");
-                    Sleep(1000);
-                    if(!iniciarSesion()) {
-                        return 0;
-                    }
+                    guardarInventario(); guardarUsuarios(); guardarConfig();
+                    printf("Cerrando sesion...\n"); Sleep(1000);
+                    if (!iniciarSesion()) return 0;
                     break;
-                case 11:
-                    // Salir del sistema
-                    mostrarEncabezado();
-                    cambiarColor(10);
-                    printf("Guardando datos...\n");
-                    guardarInventario();
-                    guardarUsuarios();
-                    printf("Datos guardados exitosamente!\n\n");
-                    printf("Gracias por usar el sistema de gestion de inventario!\n");
-                    printf("Sistema desarrollado para Fundamentos de Programacion\n");
-                    cambiarColor(7);
-                    Sleep(2000);
+                case 13:
+                    guardarInventario(); guardarUsuarios(); guardarConfig();
+                    printf("Datos guardados. ¡Hasta luego!\n"); Sleep(2000);
                     break;
                 default:
-                    cambiarColor(12);
-                    printf("\nOpcion invalida! Intente nuevamente.\n");
-                    cambiarColor(7);
-                    Sleep(1000);
-                    break;
+                    cambiarColor(12); printf("Opcion invalida!\n"); cambiarColor(7); Sleep(1000);
             }
         } else {
-            // Menú para empleados
-            switch(opcion) {
-                case 1:
-                    mostrarInventario();
-                    break;
-                case 2:
-                    buscarProducto();
-                    break;
-                case 3:
-                    registrarMovimiento();
-                    break;
-                case 4:
-                    mostrarReporteInventario();
-                    break;
-                case 5:
-                    mostrarInfoSistema();
-                    break;
-                case 6:
-                    cambiarContrasena();
-                    break;
+            switch (opcion) {
+                case 1: mostrarInventario(); break;
+                case 2: buscarProducto(); break;
+                case 3: registrarMovimiento(); break;
+                case 4: mostrarReporteInventario(); break;
+                case 5: mostrarInfoSistema(); break;
+                case 6: cambiarContrasena(); break;
                 case 7:
-                    // Cerrar sesión
                     sesionIniciada = 0;
-                    // Guardar datos antes de cerrar sesión
-                    guardarInventario();
-                    printf("Cerrando sesion...\n");
-                    Sleep(1000);
-                    if(!iniciarSesion()) {
-                        return 0;
-                    }
+                    guardarInventario(); guardarUsuarios(); guardarConfig();
+                    printf("Cerrando sesion...\n"); Sleep(1000);
+                    if (!iniciarSesion()) return 0;
                     break;
                 case 8:
-                    // Salir del sistema
-                    mostrarEncabezado();
-                    cambiarColor(10);
-                    printf("Guardando datos...\n");
-                    guardarInventario();
-                    printf("Datos guardados exitosamente!\n\n");
-                    printf("Gracias por usar el sistema de gestion de inventario!\n");
-                    printf("Sistema desarrollado para Fundamentos de Programacion\n");
-                    cambiarColor(7);
-                    Sleep(2000);
+                    guardarInventario(); guardarUsuarios(); guardarConfig();
+                    printf("Datos guardados. ¡Hasta luego!\n"); Sleep(2000);
                     break;
                 default:
-                    cambiarColor(12);
-                    printf("\nOpcion invalida! Intente nuevamente.\n");
-                    cambiarColor(7);
-                    Sleep(1000);
-                    break;
+                    cambiarColor(12); printf("Opcion invalida!\n"); cambiarColor(7); Sleep(1000);
             }
         }
-    } while((strcmp(usuarioActual.rol, "admin") == 0 && opcion != 11) ||
-            (strcmp(usuarioActual.rol, "empleado") == 0 && opcion != 8));
+    } while ((strcmp(usuarioActual.rol, "admin") == 0 && opcion != 13) ||
+             (strcmp(usuarioActual.rol, "empleado") == 0 && opcion != 8));
 
     return 0;
 }
